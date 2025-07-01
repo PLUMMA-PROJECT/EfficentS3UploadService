@@ -39,7 +39,7 @@ In the `appsettings.json` file, set the parameters:
   "UploadIntervalSeconds": 10
 }
 
----
+```
 
 🏗️ Build e Publish
 Cole the project locally
