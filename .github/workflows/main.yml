@@ -1,0 +1,48 @@
+name: Release .NET exe
+
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.2.2
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'  # o la versione che usi
+
+      - name: Restore dependencies
+        run: |
+          dotnet restore
+          dotnet build
+
+      - name: Build and publish
+        run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -o ./publish
+      - name: List files before release
+        run: dir
+
+      - name: Upload exe as artifact (optional)
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: EfficentS3UploadService
+          path: ./publish/EfficentS3UploadService.exe
+
+      - name: Create GitHub Release and upload asset
+        uses: softprops/action-gh-release@v2.3.2
+        with:
+           files: |
+            ./publish/EfficentS3UploadService.exe
+            ./EfficentS3UploaderService/install-service.ps1
+            ./EfficentS3UploaderService/uninstall-service.ps1            
+            ./publish/appsettings.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
