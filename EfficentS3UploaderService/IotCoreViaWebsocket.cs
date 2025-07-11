@@ -49,7 +49,7 @@ namespace EfficentS3UploadService
             {
                 _logger.LogInformation("Connesso ad AWS IoT Core! al broker {endpoint}", _mqtt_endpoint);
                 await mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder()
-                    .WithTopicFilter("s3/update")
+                    .WithTopicFilter("EfficentS3UploadService/update")
                     .Build());
             };
 
