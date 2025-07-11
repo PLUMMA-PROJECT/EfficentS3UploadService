@@ -1,16 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-using Amazon;
+﻿using Amazon;
 using Amazon.S3;
 using Amazon.S3.Transfer;
-using Microsoft.Extensions.Configuration;
-using System.Threading.Tasks;
 
-namespace SampleService;
+namespace EfficentS3UploadSerivice;
 
 public class S3Uploader
 {
@@ -19,9 +11,9 @@ public class S3Uploader
     private readonly string _accessKey;
     private readonly string _secretKey;
 
-    private readonly ILogger<S3Uploader> _logger;
+    private readonly ILogger<Worker> _logger;
 
-    public S3Uploader(IConfiguration config, ILogger<S3Uploader> logger)
+    public S3Uploader(IConfiguration config, ILogger<Worker> logger)
     {
         _logger = logger;
         _logger.LogInformation("S3Uploader initialized...");

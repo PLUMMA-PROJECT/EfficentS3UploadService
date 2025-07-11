@@ -1,36 +1,21 @@
-using Amazon;
-using Amazon.S3;
-using Amazon.S3.Transfer;
 using EfficentS3UploadService;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Reflection;
-using System.Threading;
-using System.Threading.Tasks;
 
-namespace SampleService;
+namespace EfficentS3UploadSerivice;
 
 public class Worker : BackgroundService
 {
     private readonly ILogger<Worker> _logger;
     private readonly ILogger<S3Uploader> _s3Logger;
+    
 
     private FileSystemWatcher? _watcher;
     private readonly string _pathToWatch = @"C:\Temp";
     private readonly S3Uploader _uploader;
-    private readonly IotCoreViaWebsocket _client;
+    private readonly IotCoreViaWebsocket _mqttClient;
     private readonly Dictionary<string, DateTime> _fileExecutionTimestamps = new();
     private readonly object _lock = new();
     private readonly TimeSpan _debounceWindow = TimeSpan.FromSeconds(3);
-    private string _mqtt_region;
-    private string _mqtt_endpoint;
-    private string _mqtt_accessKey;
-    private string _mqtt_secretKey;
+
 
     public Worker(ILogger<Worker> logger, ILogger<S3Uploader> s3Logger)
     {
@@ -38,19 +23,14 @@ public class Worker : BackgroundService
             .AddJsonFile("appsettings.json")
             .Build();
         _logger = logger;
-        _s3Logger = s3Logger;
-        _logger.LogInformation("Worker initialized...");
-        _uploader = new S3Uploader(config, _s3Logger);
+        _uploader = new S3Uploader(config, _logger);
         // Initialize Event listener on IoT Core
-        _client = new IotCoreViaWebsocket();
+        _mqttClient = new IotCoreViaWebsocket(config,_logger);
         _pathToWatch = config["FOLDER:Path"];             
-        _mqtt_region= config["AWS:MQTT_region"];
-        _mqtt_endpoint = config["AWS:MQTT_endpoint"];
-        _mqtt_accessKey =config["AWS:AccessKey"]; ;
-        _mqtt_secretKey =config["AWS:SecretKey"]; ;
+        _logger.LogInformation("Worker initialized...");
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("ExecuteAsync started.");
         // Initialize Watcher
@@ -66,11 +46,8 @@ public class Worker : BackgroundService
         _watcher.Deleted += OnDeleted;
 
         _logger.LogInformation("Started watching {path}", _pathToWatch);
-
-     
-          _client.ConnectAndSubscribeAsync(_mqtt_region, _mqtt_accessKey, _mqtt_secretKey, _mqtt_endpoint);
-
-        return Task.Delay(Timeout.Infinite, stoppingToken);
+        _mqttClient.ConnectAndSubscribeAsync();    
+        await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
     private void OnCreated(object sender, FileSystemEventArgs e)
