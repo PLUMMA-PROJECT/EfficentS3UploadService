@@ -7,6 +7,7 @@ using MQTTnet.Protocol;
 using MQTTnet.Server;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 
 namespace EfficentS3UploadService
 {
@@ -120,7 +121,11 @@ namespace EfficentS3UploadService
                 _logger.LogInformation("Mando messaggio back on line {endpoint}", _mqtt_endpoint);
                 if (_mqttClient.IsConnected)
                 {
-                    var messagePayload = "Upload service updated";
+                    var messagePayload = JsonSerializer.Serialize(new
+                    {
+                        clientId = _clientId,
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                    });                    
                     var message = new MqttApplicationMessageBuilder()
                         .WithTopic($"EfficentS3UploadService/online/{_clientId}")
                         .WithPayload(messagePayload)
