@@ -3,3 +3,10 @@
 ################################################################################
 
 /.vs
+/EfficentS3UploaderService/publish
+/EfficentS3UploaderService/appsettings.json
+/EfficentS3UploaderService/5a9c6559c26ae4cbeb46c94b423265df5d373c58ab896dca0ccdabfc9c7df75e-certificate.pem.crt
+/EfficentS3UploaderService/5a9c6559c26ae4cbeb46c94b423265df5d373c58ab896dca0ccdabfc9c7df75e-private.pem.key
+/EfficentS3UploaderService/5a9c6559c26ae4cbeb46c94b423265df5d373c58ab896dca0ccdabfc9c7df75e-public.pem.key
+/EfficentS3UploaderService/AmazonRootCA1 (1).pem
+/EfficentS3UploaderService/AmazonRootCA3 (1).pem
