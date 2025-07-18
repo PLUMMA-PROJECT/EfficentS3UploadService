@@ -39,7 +39,7 @@ public class Worker : BackgroundService
         {
             EnableRaisingEvents = true,
             IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime   | NotifyFilters.Size
         };
 
         _watcher.Created += OnCreated;

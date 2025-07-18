@@ -57,5 +57,3 @@ C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Debug\net8.0\r
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Debug\net8.0\EfficentS3UploadService.pdb
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Debug\net8.0\EfficentS3UploadService.genruntimeconfig.cache
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Debug\net8.0\ref\EfficentS3UploadService.dll
-C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Debug\net8.0\publish\appsettings.Development.json
-C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Debug\net8.0\publish\appsettings.json
