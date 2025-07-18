@@ -1,4 +1,5 @@
 using EfficentS3UploadService;
+using System.IO;
 
 namespace EfficentS3UploadSerivice;
 
@@ -46,7 +47,9 @@ public class Worker : BackgroundService
         _watcher.Deleted += OnDeleted;
 
         _logger.LogInformation("Started watching {path}", _pathToWatch);
-        _mqttClient.ConnectAndSubscribeAsync();    
+        await _mqttClient.ConnectAndSubscribeAsync();
+        await Task.Delay(TimeSpan.FromSeconds(30));
+       await _mqttClient.PublishOnlineMessage();
         await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
@@ -72,6 +75,11 @@ public class Worker : BackgroundService
     {
         try
         {
+
+            if (FileModificationTracker.WasRecentlyModifiedByMqtt(fullPath))
+            {
+                return; // Skip upload
+            }
             if (Directory.Exists(fullPath))
             {
                 _logger.LogInformation("Skipping directory change: {dir}", fullPath);
