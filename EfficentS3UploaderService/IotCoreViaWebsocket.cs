@@ -94,6 +94,17 @@ namespace EfficentS3UploadService
                 await Task.Delay(TimeSpan.FromSeconds(5));
                 try
                 {
+                    string wsUrl = AwsSigV4Signer.CreatePresignedUrl(_mqtt_accessKey, _mqtt_secretKey, _mqtt_region, _mqtt_endpoint);
+                    _mqttClientOptions = new MqttClientOptionsBuilder()
+                       .WithWebSocketServer(wsUrl)  // <-- URL WSS completo con path e query
+                       .WithProtocolVersion(MqttProtocolVersion.V311)
+                       .WithClientId(_clientId)
+                       .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
+                       .WithCleanSession(false) // Tipico per connessioni via WebSocket (senza sessione persistente)
+                       .WithTimeout(TimeSpan.FromSeconds(15))
+                       .WithoutPacketFragmentation()
+                       .Build();
+
                     await _mqttClient.ConnectAsync(_mqttClientOptions);
                 }
                 catch (Exception ex)
