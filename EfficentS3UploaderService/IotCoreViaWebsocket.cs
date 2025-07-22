@@ -11,131 +11,153 @@ namespace EfficentS3UploadService
 {
     internal class IotCoreViaWebsocket
     {
-
+        // Logger instance for logging information and errors
         private readonly ILogger<Worker> _logger;
 
+        // MQTT configuration variables
         private string _mqtt_region;
         private string _mqtt_endpoint;
         private string _mqtt_accessKey;
         private string _mqtt_secretKey;
         private string _pathToWatch;
         private string _bucketName;
+
+        // MQTT client and options
         private IMqttClient _mqttClient;
         private MqttClientOptions _mqttClientOptions;
+
+        // Unique client identifier for MQTT connection
         private string _clientId;
 
         public IotCoreViaWebsocket(IConfiguration config, ILogger<Worker> logger)
         {
-            _logger = logger;            
+            _logger = logger;
+            // Load MQTT and AWS configuration from app settings
             _mqtt_region = config["AWS:MQTT_region"];
             _mqtt_endpoint = config["AWS:MQTT_endpoint"];
-            _mqtt_accessKey = config["AWS:AccessKey"]; 
+            _mqtt_accessKey = config["AWS:AccessKey"];
             _mqtt_secretKey = config["AWS:SecretKey"];
+            // Generate unique client ID for this connection instance
             _clientId = Guid.NewGuid().ToString();
+            // Path to watch for file changes
             _pathToWatch = config["FOLDER:Path"];
+            // S3 bucket name for uploads
             _bucketName = config["AWS:BucketName"];
-            _logger.LogInformation("WSS MQTT AWS IoT Core listener initialized : region  {region} endpoint {endpoint}",_mqtt_region,_mqtt_endpoint);
+
+            _logger.LogInformation("WSS MQTT AWS IoT Core listener initialized : region  {region} endpoint {endpoint}", _mqtt_region, _mqtt_endpoint);
         }
 
 
         public async Task ConnectAndSubscribeAsync()
         {
+            // Generate a signed WebSocket URL with AWS SigV4 authentication for MQTT connection
             string wsUrl = AwsSigV4Signer.CreatePresignedUrl(_mqtt_accessKey, _mqtt_secretKey, _mqtt_region, _mqtt_endpoint);
-           
+
             _logger.LogInformation("Try to connect to : {url}", wsUrl);
 
-            var mqttFactory = new MqttFactory();            
+            var mqttFactory = new MqttFactory();
             _mqttClient = mqttFactory.CreateMqttClient();
 
-  
-
+            // Build MQTT client options for WebSocket connection using MQTT 3.1.1 protocol
             _mqttClientOptions = new MqttClientOptionsBuilder()
-                .WithWebSocketServer(wsUrl)  // <-- URL WSS completo con path e query
+                .WithWebSocketServer(wsUrl)  // <-- Full WSS URL with path and query
                 .WithProtocolVersion(MqttProtocolVersion.V311)
                 .WithClientId(_clientId)
                 .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
-                .WithCleanSession(false) // Tipico per connessioni via WebSocket (senza sessione persistente)
-                .WithTimeout(TimeSpan.FromSeconds(15))             
+                .WithCleanSession(false) // Typical for WebSocket connections (non-persistent session)
+                .WithTimeout(TimeSpan.FromSeconds(15))
                 .WithoutPacketFragmentation()
                 .Build();
-           
-
 
             _logger.LogInformation("Starting connection to broker with ClientId {clientId}", _clientId);
+
+            // Event handler when MQTT client successfully connects
             _mqttClient.ConnectedAsync += async e =>
             {
-                _logger.LogInformation("Connesso ad AWS IoT Core! al broker {endpoint}", _mqtt_endpoint);
+                _logger.LogInformation("Connected to AWS IoT Core! Broker: {endpoint}", _mqtt_endpoint);
+                // Subscribe to the topic where file update notifications arrive
                 await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder()
                     .WithTopicFilter("EfficentS3UploadService/update")
                     .Build());
+                // Publish an online status message after connection
                 await this.PublishOnlineMessage();
             };
 
+            // Event handler for receiving MQTT application messages
             _mqttClient.ApplicationMessageReceivedAsync += async e =>
             {
+                // Decode the message payload from MQTT message
                 string message = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);
-                _logger.LogInformation("Messaggio di nuovo file o file cambiato ricevuto: {message}",message);
-                _logger.LogInformation("Verifichiamo che sia salvabile in questa path: {message}", _pathToWatch+message);
+                _logger.LogInformation("Received new or updated file message: {message}", message);
+                _logger.LogInformation("Verifying if file is savable under path: {path}", _pathToWatch + message);
 
+                // Create Amazon S3 client and file manager to handle download and processing
                 var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
-                var fileManager = new FileManagerService(_logger,_pathToWatch, s3Client, _bucketName);
-               
-                
+                var fileManager = new FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
+
+                // Process the incoming message and download file if needed
                 await fileManager.ProcessMessageAndDownloadAsync(message);
-                
             };
 
-          
-
+            // Event handler for MQTT client disconnection
             _mqttClient.DisconnectedAsync += async e =>
             {
-                _logger.LogInformation("Disconnesso dal broker! Reason: {reason}, Exception: {exception}", e.Reason, e.Exception);
+                _logger.LogInformation("Disconnected from broker! Reason: {reason}, Exception: {exception}", e.Reason, e.Exception);
+                // Wait 5 seconds before attempting reconnect
                 await Task.Delay(TimeSpan.FromSeconds(5));
                 try
                 {
+                    // Recreate the signed WebSocket URL and MQTT client options for reconnection
                     string wsUrl = AwsSigV4Signer.CreatePresignedUrl(_mqtt_accessKey, _mqtt_secretKey, _mqtt_region, _mqtt_endpoint);
                     _mqttClientOptions = new MqttClientOptionsBuilder()
-                       .WithWebSocketServer(wsUrl)  // <-- URL WSS completo con path e query
+                       .WithWebSocketServer(wsUrl)  // <-- Full WSS URL with path and query
                        .WithProtocolVersion(MqttProtocolVersion.V311)
                        .WithClientId(_clientId)
                        .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
-                       .WithCleanSession(false) // Tipico per connessioni via WebSocket (senza sessione persistente)
+                       .WithCleanSession(false) // Typical for WebSocket connections (non-persistent session)
                        .WithTimeout(TimeSpan.FromSeconds(15))
                        .WithoutPacketFragmentation()
                        .Build();
 
+                    // Attempt to reconnect
                     await _mqttClient.ConnectAsync(_mqttClientOptions);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogInformation($"Errore di riconnessione: {ex.Message}");
+                    _logger.LogInformation($"Reconnection error: {ex.Message}");
                 }
             };
 
-
             try
             {
+                // Use a cancellation token to limit connection timeout to 30 seconds
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 await _mqttClient.ConnectAsync(_mqttClientOptions, cts.Token);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Timeout o errore durante connessione MQTT");
+                _logger.LogError(ex, "Timeout or error during MQTT connection");
             }
         }
 
+
+
+
+        // Publish a message to indicate the client is online
         public async Task PublishOnlineMessage()
         {
             try
             {
-                _logger.LogInformation("Mando messaggio back on line {endpoint}", _mqtt_endpoint);
+                _logger.LogInformation("Sending online message to endpoint {endpoint}", _mqtt_endpoint);
                 if (_mqttClient.IsConnected)
                 {
+                    // Prepare message payload with client ID and current timestamp
                     var messagePayload = JsonSerializer.Serialize(new
                     {
                         clientId = _clientId,
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-                    });                    
+                    });
+
                     var message = new MqttApplicationMessageBuilder()
                         .WithTopic($"EfficentS3UploadService/online/{_clientId}")
                         .WithPayload(messagePayload)
@@ -146,18 +168,65 @@ namespace EfficentS3UploadService
                     _logger.LogInformation("IsConnected before publish: {connected}", _mqttClient.IsConnected);
                     try
                     {
+                        // Publish the online status message to MQTT broker
                         await _mqttClient.PublishAsync(message);
-                        _logger.LogInformation("Messaggio pubblicato");
+                        _logger.LogInformation("Message published");
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Errore durante PublishAsync");
+                        _logger.LogError(ex, "Error during PublishAsync");
                     }
-                    _logger.LogInformation("PublishAsync chiamato");
+                    _logger.LogInformation("PublishAsync called");
                 }
                 else
                 {
-                    _logger.LogWarning("Client MQTT non è connesso al momento della pubblicazione.");
+                    _logger.LogWarning("MQTT client is not connected at publish time.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogInformation(ex.Message);
+            }
+        }
+
+        // Publish a message to notify file deletion by key
+        public async Task PublishDeleteMessage(string _key)
+        {
+            try
+            {
+                _logger.LogInformation("Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
+                if (_mqttClient.IsConnected)
+                {
+                    // Prepare message payload with client ID and the key of the deleted file
+                    var messagePayload = JsonSerializer.Serialize(new
+                    {
+                        clientId = _clientId,
+                        key = _key
+                    });
+
+                    var message = new MqttApplicationMessageBuilder()
+                        .WithTopic($"EfficentS3UploadService/delete")
+                        .WithPayload(messagePayload)
+                        .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                        .WithRetainFlag(false)
+                        .Build();
+
+                    _logger.LogInformation("Delete file send: {key}", _key);
+                    try
+                    {
+                        // Publish the delete notification message
+                        await _mqttClient.PublishAsync(message);
+                        _logger.LogInformation("Deleted message published");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error during PublishDeleteMessage");
+                    }
+                    _logger.LogInformation("PublishDeleteMessage called");
+                }
+                else
+                {
+                    _logger.LogWarning("MQTT client is not connected at publish time.");
                 }
             }
             catch (Exception ex)
