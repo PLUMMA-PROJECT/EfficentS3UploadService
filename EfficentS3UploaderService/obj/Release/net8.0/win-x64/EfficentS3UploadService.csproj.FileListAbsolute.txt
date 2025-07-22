@@ -237,3 +237,4 @@ C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Release\net8.0
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Release\net8.0\win-x64\EfficentS3UploadService.pdb
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Release\net8.0\win-x64\EfficentS3UploadService.genruntimeconfig.cache
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Release\net8.0\win-x64\ref\EfficentS3UploadService.dll
+C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\appsettings.json

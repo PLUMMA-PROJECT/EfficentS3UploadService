@@ -4,8 +4,6 @@ using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Formatter;
 using MQTTnet.Protocol;
-using MQTTnet.Server;
-using System.IO;
 using System.Text;
 using System.Text.Json;
 
@@ -70,6 +68,7 @@ namespace EfficentS3UploadService
                 await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder()
                     .WithTopicFilter("EfficentS3UploadService/update")
                     .Build());
+                await this.PublishOnlineMessage();
             };
 
             _mqttClient.ApplicationMessageReceivedAsync += async e =>

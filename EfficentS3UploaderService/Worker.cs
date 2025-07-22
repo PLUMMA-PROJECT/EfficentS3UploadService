@@ -49,7 +49,7 @@ public class Worker : BackgroundService
         _logger.LogInformation("Started watching {path}", _pathToWatch);
         await _mqttClient.ConnectAndSubscribeAsync();
         await Task.Delay(TimeSpan.FromSeconds(30));
-       await _mqttClient.PublishOnlineMessage();
+        await _mqttClient.PublishOnlineMessage();
         await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
