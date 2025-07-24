@@ -29,15 +29,28 @@ In the `appsettings.json` file, set the parameters:
 
 ```json
 {
-  "AWS": {
-    "AccessKey": "YOUR_ACCESS_KEY",
-    "SecretKey": "YOUR_SECRET_KEY",
-    "Region": "eu-west-1",
-    "BucketName": "your-s3-bucket-name"
+  "LOGS": {
+    "LogsFile": "EfficentS3UploadService.log"
   },
-  "WatchFolder": "C:\\\\path\\\\to\\\\monitor",
-  "UploadIntervalSeconds": 10
+  "FOLDER": {
+    "Path": "M:\\"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Microsoft.Hosting.Lifetime": "Information",
+      "Default": "Information"
+    }
+  },
+  "AWS": {
+    "Region": "eu-west-1",
+    "SecretKey": "------------------+FwH7hjVwAahOrGTdwoT",
+    "BucketName": "autocad-calzoni",
+    "AccessKey": "---------------------",
+    "MQTT_endpoint": "--------------ats.iot.eu-west-1.amazonaws.com",
+    "MQTT_region": "eu-west-1"
+  }
 }
+
 
 ```
 
