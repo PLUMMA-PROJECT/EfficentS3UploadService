@@ -1,6 +1,5 @@
 ﻿using Amazon.S3;
 using Amazon.S3.Model;
-using EfficentS3UploadSerivice;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualBasic.FileIO;
 using System.IO;
@@ -13,13 +12,13 @@ namespace EfficentS3UploadService.FilesIo
     // This service handles file synchronization between AWS S3 and the local file system.
     internal class FileManagerService
     {
-        private readonly ILogger<Worker> _logger;
+        private readonly ILogger<Worker.Worker> _logger;
         private readonly string _basePath;
         private readonly IAmazonS3 _s3Client;
         private readonly string _bucketName;
 
         // Constructor initializes required dependencies
-        public FileManagerService(ILogger<Worker> logger, string basePath, IAmazonS3 s3Client, string bucketName)
+        public FileManagerService(ILogger<Worker.Worker> logger, string basePath, IAmazonS3 s3Client, string bucketName)
         {
             _logger = logger;
             _basePath = basePath;

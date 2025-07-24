@@ -1,10 +1,11 @@
 using EfficentS3UploadService;
 using EfficentS3UploadService.FilesIo;
+using EfficentS3UploadService.Helpers;
 using EfficentS3UploadService.S3;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace EfficentS3UploadSerivice;
+namespace EfficentS3UploadService.Worker;
 
 public class Worker : BackgroundService
 {
@@ -95,9 +96,8 @@ public class Worker : BackgroundService
     {
         try
         {
-            _logger.LogInformation("(EnqueueDeletePath) File saved in queue: {file}", fullPath);
-            _logger.LogInformation("Delete queue path is: {path}", DeleteQueueFile);
-            File.AppendAllLines(DeleteQueueFile, new[] { fullPath });
+            _logger.LogInformation("(EnqueueDeletePath) Enqueuing file to delete queue: {file}", fullPath);
+            PersistentQueueHelper.EnqueueToJsonFile(DeleteQueueFile, fullPath);
         }
         catch (Exception ex)
         {
@@ -113,7 +113,7 @@ public class Worker : BackgroundService
         {
             _logger.LogInformation("(EnqueueNewPath) File saved in queue: {file}", fullPath);
             _logger.LogInformation("New file queue path is: {path}", NewFileQueue);
-            File.AppendAllLines(NewFileQueue, new[] { fullPath });
+            PersistentQueueHelper.EnqueueToJsonFile(NewFileQueue, fullPath);
         }
         catch (Exception ex)
         {
@@ -192,9 +192,9 @@ public class Worker : BackgroundService
 
     public static async Task PublishQueuedNewfilesAsync()
     {
-        if (!File.Exists(Worker.NewFileQueue)) return;
+        if (!File.Exists(NewFileQueue)) return;
 
-        var lines = File.ReadAllLines(Worker.NewFileQueue).ToList();
+        var lines = PersistentQueueHelper.ReadItemList(NewFileQueue);
         var remaining = new List<string>();
 
         foreach (var key in lines)
@@ -212,8 +212,7 @@ public class Worker : BackgroundService
                 remaining.Add(key);
             }
         }
-
-        File.WriteAllLines(Worker.NewFileQueue, remaining);
+        PersistentQueueHelper.WriteItemList(NewFileQueue,remaining);
     }
 
     private static async Task<bool> IsFileReadyAsync(string filePath)

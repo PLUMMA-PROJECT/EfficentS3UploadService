@@ -1,7 +1,6 @@
 ﻿using Amazon;
 using Amazon.S3;
 using Amazon.S3.Transfer;
-using EfficentS3UploadSerivice;
 using System.Security.Cryptography;
 
 namespace EfficentS3UploadService.S3;
@@ -15,10 +14,10 @@ public class S3Uploader
     private readonly string _secretKey;
 
     // Logger instance
-    private readonly ILogger<Worker> _logger;
+    private readonly ILogger<Worker.Worker> _logger;
 
     // Constructor: loads AWS config and sets logger
-    public S3Uploader(IConfiguration config, ILogger<Worker> logger)
+    public S3Uploader(IConfiguration config, ILogger<Worker.Worker> logger)
     {
         _logger = logger;
         _logger.LogInformation("S3Uploader initialized...");

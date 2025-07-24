@@ -1,5 +1,5 @@
 ﻿using Amazon.S3;
-using EfficentS3UploadSerivice;
+using EfficentS3UploadService.Helpers;
 using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Formatter;
@@ -15,7 +15,7 @@ namespace EfficentS3UploadService
     internal class IotCoreViaWebsocket
     {
         // Logger instance for application diagnostics
-        private readonly ILogger<Worker> _logger;
+        private readonly ILogger<Worker.Worker> _logger;
 
         // MQTT and AWS configuration values
         private string _mqtt_region;
@@ -33,7 +33,7 @@ namespace EfficentS3UploadService
         private string _clientId;
 
         // Constructor that receives configuration and logger
-        public IotCoreViaWebsocket(IConfiguration config, ILogger<Worker> logger)
+        public IotCoreViaWebsocket(IConfiguration config, ILogger<Worker.Worker> logger)
         {
             _logger = logger;
 
@@ -84,7 +84,7 @@ namespace EfficentS3UploadService
                 // Publish "online" message and any pending operations
                 await this.PublishOnlineMessage();
                 await this.PublishQueuedDeletesAsync();
-                await Worker.PublishQueuedNewfilesAsync();
+                await Worker.Worker.PublishQueuedNewfilesAsync();
 
                 _logger.LogInformation("Subscribed to topic 'EfficentS3UploadService/update' and published online message.");
             };
@@ -237,12 +237,12 @@ namespace EfficentS3UploadService
         // Re-publishes delete messages stored in a queue file
         public async Task PublishQueuedDeletesAsync()
         {
-            if (!File.Exists(Worker.DeleteQueueFile)) return;
+            if (!File.Exists(Worker.Worker.DeleteQueueFile)) return;
 
-            var lines = File.ReadAllLines(Worker.DeleteQueueFile).ToList();
+            List<string> lines =  PersistentQueueHelper.ReadItemList(Worker.Worker.DeleteQueueFile);            
             var remaining = new List<string>();
 
-            foreach (var key in lines)
+            foreach (string key in lines)
             {
                 try
                 {
@@ -257,7 +257,7 @@ namespace EfficentS3UploadService
                 }
             }
 
-            File.WriteAllLines(Worker.DeleteQueueFile, remaining);
+            PersistentQueueHelper.WriteItemList(Worker.Worker.DeleteQueueFile, remaining);
         }
 
         // Handles a delete message by removing or moving the file
@@ -299,7 +299,7 @@ namespace EfficentS3UploadService
                     if (!string.IsNullOrEmpty(fileKey))
                     {
                         string fullPath = Path.Combine(_pathToWatch, fileKey.Replace('/', Path.DirectorySeparatorChar));
-                        await File.AppendAllLinesAsync(Worker.DeleteQueueFile, new[] { fullPath });
+                        await File.AppendAllLinesAsync(Worker.Worker.DeleteQueueFile, new[] { fullPath });
                         _logger.LogInformation("Queued delete file for retry: {file}", fullPath);
                     }
                 }

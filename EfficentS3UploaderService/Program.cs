@@ -1,4 +1,4 @@
-using EfficentS3UploadSerivice;
+using EfficentS3UploadService.Worker;
 using Serilog;
 IConfiguration config = new ConfigurationBuilder()
           .AddJsonFile("appsettings.json")
