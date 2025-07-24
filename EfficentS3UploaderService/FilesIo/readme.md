@@ -1,70 +1,123 @@
+﻿
 # FileManagerService
 
 ## Overview
 
-`FileManagerService` is a utility class responsible for synchronizing files between AWS S3 and the local filesystem. It handles downloading files from S3 based on MQTT messages and managing local file states including safe replacement, hash comparison, and deletion via Recycle Bin.
+`FileManagerService` is a core utility in the `EfficentS3UploadService` project responsible for **synchronizing files between AWS S3 and the local filesystem**. It is designed to work with **MQTT messages** from AWS IoT Core, and ensures that files are downloaded, updated, or removed **only when necessary**, based on SHA256 hash comparison.
+
+The service also integrates with a helper class, `FileModificationTracker`, to prevent redundant operations triggered by closely repeated MQTT events.
 
 ---
 
-## Features
+## Responsibilities
 
-- Download and store S3 files locally
-- Detect content changes via SHA256 hash comparison
-- Avoids overwriting locked or unchanged files
-- Automatically creates directories as needed
-- Reads custom SHA256 metadata from S3 objects
-- Moves files to Recycle Bin instead of hard deletion (Windows)
+- 📥 Download files from S3 based on MQTT messages.
+- 🧠 Detect file content changes using SHA256 hashes.
+- 🧷 Avoid overwriting files that are locked or already up-to-date.
+- 🗂 Automatically create local directories if they don’t exist.
+- 🧾 Read SHA256 hash metadata from S3 (`x-amz-meta-sha256`).
+- 🗑 Move deleted files to the Windows Recycle Bin (when applicable).
+- 🕒 Track and suppress redundant updates using `FileModificationTracker`.
+
+---
+
+## MQTT Message Handling Flow
+
+1. Receives a JSON message via MQTT:
+   ```json
+   { "key": "folder%2Ffile.txt" }
+   ```
+2. Decodes the S3 key and downloads the file.
+3. Retrieves the SHA256 hash from S3 metadata.
+4. Compares it with the local file's hash.
+5. If content has changed, saves or replaces the file.
+6. Marks the file as modified using `FileModificationTracker`.
 
 ---
 
 ## Public Methods
 
-### `ProcessMessageAndDownloadAsync(string jsonMessage)`
-Parses a JSON message (from MQTT), decodes the S3 key, downloads the corresponding file (if needed), and stores it locally after comparing hashes.
+### `Task ProcessMessageAndDownloadAsync(string jsonMessage)`
 
-### `MoveFileToRecycleBin(string filePath)`
-Moves the specified file to the system's Recycle Bin. Returns `true` if successful or the file doesn't exist.
+- Parses the incoming JSON MQTT message.
+- Downloads the corresponding file from S3.
+- Compares content using SHA256 hashes.
+- Saves or updates the local file only if needed.
+- Uses `FileModificationTracker` to prevent redundant reprocessing.
+
+### `bool MoveFileToRecycleBin(string filePath)`
+
+- Moves the specified file to the Recycle Bin on Windows.
+- Returns `true` if the operation succeeds or the file doesn’t exist.
 
 ---
 
 ## Private Methods
 
-- `DownloadFromS3Async(string key)`  
-  Downloads and returns the contents of an S3 object.
-
-- `SaveOrUpdateFile(string filePath, byte[] newContent)`  
-  Saves a file if it doesn�t exist or overwrites it if the content differs.
-
-- `IsFileLocked(string path)`  
-  Checks whether the file is currently locked by another process.
-
-- `ComputeSha256(byte[] data)`  
-  Calculates the SHA256 hash of a byte array.
-
-- `GetS3ObjectSha256MetadataAsync(string key)`  
-  Retrieves the `x-amz-meta-sha256` value from S3 object metadata.
+| Method                                | Description |
+|---------------------------------------|-------------|
+| `DownloadFromS3Async(string key)`     | Downloads file contents from S3 for a given key. |
+| `SaveOrUpdateFile(string path, byte[])` | Saves the file if new or different from existing content. |
+| `IsFileLocked(string path)`           | Checks if the file is currently in use by another process. |
+| `ComputeSha256(byte[] data)`          | Calculates the SHA256 hash of a byte array. |
+| `GetS3ObjectSha256MetadataAsync(string key)` | Retrieves SHA256 metadata from S3 object headers. |
 
 ---
 
-## Configuration
+## FileModificationTracker
 
-This class depends on the following injected values:
+### Purpose
 
-- `ILogger<Worker>` � For structured logging
-- `string basePath` � Root local folder where files will be written
-- `IAmazonS3 s3Client` � AWS S3 client for interacting with buckets
-- `string bucketName` � Target S3 bucket name
+`FileModificationTracker` is a lightweight static helper that tracks **files recently modified** by the system as a result of MQTT messages. This avoids **reprocessing** the same file within a short time window.
+
+### How it works
+
+- Whenever a file is modified due to an MQTT-triggered download, its path is recorded with a UTC timestamp.
+- If another MQTT message arrives for the same file shortly after (e.g., within 3 seconds), the file is **skipped**.
+- This prevents redundant writes and unnecessary S3 requests.
+
+### API
+
+| Method | Description |
+|--------|-------------|
+| `void MarkAsModifiedByMqtt(string path)` | Records the file path and timestamp. |
+| `bool WasRecentlyModifiedByMqtt(string path, int secondsThreshold = 3)` | Returns `true` if the file was modified within the last N seconds, and removes expired entries. |
 
 ---
 
-## Notes
+## Dependencies
 
-- Designed for use with **AWS IoT Core + MQTT** and **S3**.
-- Compatible with Windows-based environments for Recycle Bin operations.
-- Assumes SHA256 hashes are stored in the metadata field `x-amz-meta-sha256` of each S3 object.
+| Dependency             | Description |
+|------------------------|-------------|
+| `ILogger<Worker>`      | Logs information and errors during processing. |
+| `IAmazonS3`            | AWS S3 SDK client for downloading files and reading metadata. |
+| `string basePath`      | Local root directory where files are stored. |
+| `string bucketName`    | Name of the S3 bucket to pull files from. |
+
+---
+
+## Platform Notes
+
+- ✅ Fully compatible with Windows
+- 🗑 Uses Windows-specific Recycle Bin API (via `Microsoft.VisualBasic.FileIO`)
+- 📦 Assumes S3 objects have `x-amz-meta-sha256` metadata set for hash checking
+- ⚠️ Will skip files locked by external applications
+
+---
+
+## Example JSON Message
+
+```json
+{
+  "key": "configs%2Fdevice-123.json"
+}
+```
+
+> The `key` is expected to be URL-encoded and will be decoded internally before accessing S3.
 
 ---
 
 ## License
 
-Internal utility used in the `EfficentS3UploadService` project. Not for public distribution.
+📁 Internal use only – part of the `EfficentS3UploadService` system.  
+Not intended for public reuse or distribution.
