@@ -68,6 +68,7 @@ public class S3Uploader
         catch (Exception ex)
         {
             _logger.LogError(ex, "Errore durante l'upload su S3.");
+            throw new Exception("Errore durante l'upload su S3", ex);
         }
     }
 

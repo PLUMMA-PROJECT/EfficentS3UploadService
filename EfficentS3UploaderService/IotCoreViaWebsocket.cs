@@ -86,6 +86,7 @@ namespace EfficentS3UploadService
                 // Publish an online status message after connection
                 await this.PublishOnlineMessage();
                 await this.PublishQueuedDeletesAsync();
+                await Worker.PublishQueuedNewfilesAsync();
                 _logger.LogInformation("Subscribed to topic 'EfficentS3UploadService/update' and published online message.");
 
 

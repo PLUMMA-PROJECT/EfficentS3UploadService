@@ -6,13 +6,13 @@ namespace EfficentS3UploadSerivice;
 
 public class Worker : BackgroundService
 {
-    private readonly ILogger<Worker> _logger;
+    private static ILogger<Worker> _logger;
     private readonly ILogger<S3Uploader> _s3Logger;
     
 
     private FileSystemWatcher? _watcher;
-    private readonly string _pathToWatch = @"C:\Temp";
-    private readonly S3Uploader _uploader;
+    private static string _pathToWatch = @"C:\Temp";
+    private static S3Uploader _uploader;
     private readonly IotCoreViaWebsocket _mqttClient;
     private readonly Dictionary<string, DateTime> _fileExecutionTimestamps = new();
     private readonly object _lock = new();
@@ -52,6 +52,7 @@ public class Worker : BackgroundService
         await Task.Delay(TimeSpan.FromSeconds(30));
         await _mqttClient.PublishOnlineMessage();
         await Task.Delay(Timeout.Infinite, stoppingToken);
+        await PublishQueuedNewfilesAsync();
     }
 
     private void OnCreated(object sender, FileSystemEventArgs e)
@@ -84,8 +85,8 @@ public class Worker : BackgroundService
     }
 
     public static readonly string DeleteQueueFile = Path.Combine(AppContext.BaseDirectory, "delete_queue.json");
+    public static readonly string NewFileQueue = Path.Combine(AppContext.BaseDirectory, "newfile_queue.json");
 
-    //  private readonly Queue<string> _deleteQueue = new();
 
     // Chiamato quando la connessione fallisce
     private void EnqueueDeletePath(string fullPath)
@@ -102,6 +103,21 @@ public class Worker : BackgroundService
         }
     }
 
+
+    // Chiamato quando la connessione fallisce
+    private void EnqueueNewPath(string fullPath)
+    {
+        try
+        {
+            _logger.LogInformation("(EnqueueNewPath) File saved in queue: {file}", fullPath);
+            _logger.LogInformation("New file queue path is: {path}", NewFileQueue);
+            File.AppendAllLines(NewFileQueue, new[] { fullPath });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to enqueue new file path: {file}", fullPath);
+        }
+    }
 
 
 
@@ -166,8 +182,36 @@ public class Worker : BackgroundService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to handle file change for {file}", fullPath);
+           _logger.LogError(ex, "Failed to handle file change for {file}", fullPath);
+            EnqueueNewPath(fullPath);
+            
         }
+    }
+
+    public static async Task PublishQueuedNewfilesAsync()
+    {
+        if (!File.Exists(Worker.NewFileQueue)) return;
+
+        var lines = File.ReadAllLines(Worker.NewFileQueue).ToList();
+        var remaining = new List<string>();
+
+        foreach (var key in lines)
+        {
+            try
+            {
+                string relativeKey = Path.GetRelativePath(_pathToWatch, key)
+                        .Replace("\\", "/");
+                await _uploader.UploadFileToS3(key, relativeKey);
+                _logger.LogInformation("(PublishQueuedNewfilesAsync) Republished new file message: {key}", key);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "(PublishQueuedNewfilesAsync) Retry failed new file for: {key}", key);
+                remaining.Add(key);
+            }
+        }
+
+        File.WriteAllLines(Worker.NewFileQueue, remaining);
     }
 
     private static async Task<bool> IsFileReadyAsync(string filePath)
@@ -175,7 +219,7 @@ public class Worker : BackgroundService
         try
         {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.None, 4096, true);
-            await Task.CompletedTask; // placeholder per async
+            await Task.CompletedTask; 
             return true;
         }
         catch (IOException)
