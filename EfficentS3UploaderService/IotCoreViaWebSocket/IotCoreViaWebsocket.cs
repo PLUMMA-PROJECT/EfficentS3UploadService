@@ -103,7 +103,7 @@ namespace EfficentS3UploadService
                     case "EfficentS3UploadService/update":
                         // Handle update message: download and store the file from S3
                         var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
-                        var fileManager = new FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
+                        var fileManager = new FilesIo.FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
                         await fileManager.ProcessMessageAndDownloadAsync(message);
                         break;
 
@@ -276,7 +276,7 @@ namespace EfficentS3UploadService
                 string fileToDelete = Path.Combine(_pathToWatch, relativeKey.Replace('/', Path.DirectorySeparatorChar));
 
                 var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
-                var fileManager = new FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
+                var fileManager = new FilesIo.FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
 
                 bool movedToRecycleBin = fileManager.MoveFileToRecycleBin(fileToDelete);
 
