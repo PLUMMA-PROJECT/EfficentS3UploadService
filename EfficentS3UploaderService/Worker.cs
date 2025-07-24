@@ -1,5 +1,6 @@
 using EfficentS3UploadService;
 using System.IO;
+using System.Threading.Tasks;
 
 namespace EfficentS3UploadSerivice;
 
@@ -55,18 +56,58 @@ public class Worker : BackgroundService
 
     private void OnCreated(object sender, FileSystemEventArgs e)
     {
+        if (ShouldIgnore(e.FullPath)) return;
         _logger.LogInformation("File created: {file}", e.FullPath);
         _ = HandleFileChangeAsync(e.FullPath);
     }
 
     private void OnDeleted(object sender, FileSystemEventArgs e)
     {
-        _logger.LogInformation("File deleted: {file}", e.FullPath);
-        // Non serve upload su cancellazione
+        if (ShouldIgnore(e.FullPath)) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                _logger.LogInformation("File deleted: {file}", e.FullPath);
+                string relativeKey = Path.GetRelativePath(_pathToWatch, e.FullPath)
+                         .Replace("\\", "/");
+                await _mqttClient.PublishDeleteMessage(relativeKey);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling deleted file: {file}", e.FullPath);
+                _logger.LogInformation("Delete queue path is: {path}", DeleteQueueFile);
+
+                EnqueueDeletePath(e.FullPath);
+            }
+        });
     }
+
+    public static readonly string DeleteQueueFile = Path.Combine(AppContext.BaseDirectory, "delete_queue.json");
+
+    //  private readonly Queue<string> _deleteQueue = new();
+
+    // Chiamato quando la connessione fallisce
+    private void EnqueueDeletePath(string fullPath)
+    {
+        try
+        {
+            _logger.LogInformation("(EnqueueDeletePath) File saved in queue: {file}", fullPath);
+            _logger.LogInformation("Delete queue path is: {path}", DeleteQueueFile);
+            File.AppendAllLines(DeleteQueueFile, new[] { fullPath });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to enqueue delete path: {file}", fullPath);
+        }
+    }
+
+
+
 
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
+        if (ShouldIgnore(e.FullPath)) return;
         _logger.LogInformation("File changed: {file}", e.FullPath);
         _ = HandleFileChangeAsync(e.FullPath);
     }
@@ -152,5 +193,11 @@ public class Worker : BackgroundService
         _watcher?.Dispose();
         _logger.LogInformation("File watcher stopped.");
         return base.StopAsync(cancellationToken);
+    }
+
+    private bool ShouldIgnore(string path)
+    {
+        return path.Contains("$RECYCLE.BIN", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("Thumbs.db", StringComparison.OrdinalIgnoreCase);
     }
 }

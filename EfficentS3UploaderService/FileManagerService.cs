@@ -2,6 +2,7 @@
 using Amazon.S3.Model;
 using EfficentS3UploadSerivice;
 using Microsoft.Extensions.Logging;
+using Microsoft.VisualBasic.FileIO;
 using System.IO;
 using System.Runtime.Intrinsics.Arm;
 using System.Security.Cryptography;
@@ -185,5 +186,35 @@ namespace EfficentS3UploadService
             }
         }
 
+  
+
+        public bool MoveFileToRecycleBin(string filePath)
+        {
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                FileSystem.DeleteFile(
+                    filePath,
+                    UIOption.OnlyErrorDialogs,
+                    RecycleOption.SendToRecycleBin
+                );
+                _logger.LogInformation("File spostato nel cestino: {filePath}", filePath);
+                    return true;
+            }
+            else
+            {
+                _logger.LogWarning("Il file da cancellare non esiste: {filePath}", filePath);
+                    return true;
+                }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Errore durante lo spostamento del file nel cestino: {filePath}", filePath);
+                return false;
+            }
     }
+
+
+}
 }

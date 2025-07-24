@@ -4,6 +4,7 @@ using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Formatter;
 using MQTTnet.Protocol;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 
@@ -47,7 +48,6 @@ namespace EfficentS3UploadService
             _logger.LogInformation("WSS MQTT AWS IoT Core listener initialized : region  {region} endpoint {endpoint}", _mqtt_region, _mqtt_endpoint);
         }
 
-
         public async Task ConnectAndSubscribeAsync()
         {
             // Generate a signed WebSocket URL with AWS SigV4 authentication for MQTT connection
@@ -79,8 +79,20 @@ namespace EfficentS3UploadService
                 await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder()
                     .WithTopicFilter("EfficentS3UploadService/update")
                     .Build());
+
+                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder()
+                    .WithTopicFilter("EfficentS3UploadService/delete")
+                    .Build());
                 // Publish an online status message after connection
                 await this.PublishOnlineMessage();
+                await this.PublishQueuedDeletesAsync();
+                _logger.LogInformation("Subscribed to topic 'EfficentS3UploadService/update' and published online message.");
+
+
+
+
+
+
             };
 
             // Event handler for receiving MQTT application messages
@@ -88,15 +100,29 @@ namespace EfficentS3UploadService
             {
                 // Decode the message payload from MQTT message
                 string message = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);
+                string topic = e.ApplicationMessage.Topic;
                 _logger.LogInformation("Received new or updated file message: {message}", message);
                 _logger.LogInformation("Verifying if file is savable under path: {path}", _pathToWatch + message);
+                
+                switch (topic)
+                {
+                    case "EfficentS3UploadService/update":
+                        // Create Amazon S3 client and file manager to handle download and processing
+                        var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
+                        var fileManager = new FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
+                
+                        // Process the incoming message and download file if needed
+                        await fileManager.ProcessMessageAndDownloadAsync(message);
+                        break;
+                    case "EfficentS3UploadService/delete":
+                        _logger.LogInformation("Received new request to delete file message: {message}", message);
+                        await HandleDeleteMessage(message);
+                        break;
 
-                // Create Amazon S3 client and file manager to handle download and processing
-                var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
-                var fileManager = new FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
-
-                // Process the incoming message and download file if needed
-                await fileManager.ProcessMessageAndDownloadAsync(message);
+                    default:
+                        _logger.LogWarning("Received message on unhandled topic: {topic}", topic);
+                        break;
+                }
             };
 
             // Event handler for MQTT client disconnection
@@ -140,15 +166,12 @@ namespace EfficentS3UploadService
             }
         }
 
-
-
-
         // Publish a message to indicate the client is online
         public async Task PublishOnlineMessage()
         {
             try
             {
-                _logger.LogInformation("Sending online message to endpoint {endpoint}", _mqtt_endpoint);
+                _logger.LogInformation("(PublishOnlineMessage) Sending online signal message to endpoint {endpoint}", _mqtt_endpoint);
                 if (_mqttClient.IsConnected)
                 {
                     // Prepare message payload with client ID and current timestamp
@@ -165,22 +188,22 @@ namespace EfficentS3UploadService
                         .WithRetainFlag(false)
                         .Build();
 
-                    _logger.LogInformation("IsConnected before publish: {connected}", _mqttClient.IsConnected);
+                    _logger.LogInformation("(PublishOnlineMessage) Check if client IsConnected before publish online signal: {connected}", _mqttClient.IsConnected);
                     try
                     {
                         // Publish the online status message to MQTT broker
                         await _mqttClient.PublishAsync(message);
-                        _logger.LogInformation("Message published");
+                        _logger.LogInformation("(PublishOnlineMessage) Signal message published");
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Error during PublishAsync");
+                        _logger.LogError(ex, "(PublishOnlineMessage) Error during PublishAsync");
                     }
-                    _logger.LogInformation("PublishAsync called");
+                    _logger.LogInformation("(PublishOnlineMessage) PublishAsync called");
                 }
                 else
                 {
-                    _logger.LogWarning("MQTT client is not connected at publish time.");
+                    _logger.LogWarning("(PublishOnlineMessage) MQTT client is not connected at publish time.");
                 }
             }
             catch (Exception ex)
@@ -188,51 +211,140 @@ namespace EfficentS3UploadService
                 _logger.LogInformation(ex.Message);
             }
         }
+ 
 
-        // Publish a message to notify file deletion by key
-        public async Task PublishDeleteMessage(string _key)
+        public async Task PublishDeleteMessage(string key)
+        {
+            _logger.LogInformation("Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
+
+            var messagePayload = JsonSerializer.Serialize(new
+            {
+                clientId = _clientId,
+                key = key
+            });
+
+            var message = new MqttApplicationMessageBuilder()
+                .WithTopic("EfficentS3UploadService/delete")
+                .WithPayload(messagePayload)
+                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                .WithRetainFlag(false)
+                .Build();
+
+            try
+            {
+                if (_mqttClient.IsConnected)
+                {
+                    await _mqttClient.PublishAsync(message);
+                    _logger.LogInformation("Deleted message published: {key}", key);
+                }
+                else
+                {
+                    throw new InvalidOperationException("MQTT client is disconnected.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "MQTT publish failed. Queuing delete message: {key}", messagePayload);            
+                throw new InvalidOperationException("MQTT publish failed. Queuing delete message: "+ messagePayload);
+            }
+        }
+
+
+
+
+        public async Task PublishQueuedDeletesAsync()
+        {
+            if (!File.Exists(Worker.DeleteQueueFile)) return;
+
+            var lines = File.ReadAllLines(Worker.DeleteQueueFile).ToList();
+            var remaining = new List<string>();
+
+            foreach (var key in lines)
+            {
+                try
+                {
+                    string relativeKey = Path.GetRelativePath(_pathToWatch, key)
+                            .Replace("\\", "/");
+                    await this.PublishDeleteMessage(relativeKey);
+                    _logger.LogInformation("(PublishQueuedDeletesAsync) Republished delete message: {key}", key);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "(PublishQueuedDeletesAsync) Retry failed for: {key}", key);
+                    remaining.Add(key);
+                }
+            }
+
+            File.WriteAllLines(Worker.DeleteQueueFile, remaining);
+        }
+
+        private async Task HandleDeleteMessage(string messagePayload)
         {
             try
             {
-                _logger.LogInformation("Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
-                if (_mqttClient.IsConnected)
+                _logger.LogInformation("Handling delete message: {payload}", messagePayload);
+
+                // Parse JSON per ottenere la key da cancellare
+                var jsonDoc = JsonDocument.Parse(messagePayload);
+                if (!jsonDoc.RootElement.TryGetProperty("key", out var keyElement))
                 {
-                    // Prepare message payload with client ID and the key of the deleted file
-                    var messagePayload = JsonSerializer.Serialize(new
-                    {
-                        clientId = _clientId,
-                        key = _key
-                    });
+                    _logger.LogWarning("Delete message JSON does not contain 'key' property.");
+                    return;
+                }
 
-                    var message = new MqttApplicationMessageBuilder()
-                        .WithTopic($"EfficentS3UploadService/delete")
-                        .WithPayload(messagePayload)
-                        .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
-                        .WithRetainFlag(false)
-                        .Build();
+                string relativeKey = keyElement.GetString();
+                if (string.IsNullOrEmpty(relativeKey))
+                {
+                    _logger.LogWarning("Delete message 'key' is null or empty.");
+                    return;
+                }
 
-                    _logger.LogInformation("Delete file send: {key}", _key);
-                    try
-                    {
-                        // Publish the delete notification message
-                        await _mqttClient.PublishAsync(message);
-                        _logger.LogInformation("Deleted message published");
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error during PublishDeleteMessage");
-                    }
-                    _logger.LogInformation("PublishDeleteMessage called");
+                // Costruisci il percorso assoluto del file da cancellare
+                string fileToDelete = Path.Combine(_pathToWatch, relativeKey.Replace('/', Path.DirectorySeparatorChar));
+
+                // Crea il client S3 e file manager
+                var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
+                var fileManager = new FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
+
+                // Usa il metodo MoveFileToRecycleBin invece di cancellare direttamente
+                bool movedToRecycleBin = fileManager.MoveFileToRecycleBin(fileToDelete);
+
+                if (movedToRecycleBin)
+                {
+                    _logger.LogInformation("File moved to recycle bin: {file}", fileToDelete);
                 }
                 else
                 {
-                    _logger.LogWarning("MQTT client is not connected at publish time.");
+                    _logger.LogWarning("File could not be moved to recycle bin or does not exist: {file}", fileToDelete);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogInformation(ex.Message);
+                _logger.LogError(ex, "Error handling delete message.");
+
+                // In caso di errore, puoi accodare il messaggio per retry futuro
+                try
+                {
+                    string fileKey = null;
+                    var jsonDoc = JsonDocument.Parse(messagePayload);
+                    if (jsonDoc.RootElement.TryGetProperty("key", out var keyElement))
+                    {
+                        fileKey = keyElement.GetString();
+                    }
+
+                    if (!string.IsNullOrEmpty(fileKey))
+                    {
+                        string fullPath = Path.Combine(_pathToWatch, fileKey.Replace('/', Path.DirectorySeparatorChar));
+                        await File.AppendAllLinesAsync(Worker.DeleteQueueFile, new[] { fullPath });
+                        _logger.LogInformation("Queued delete file for retry: {file}", fullPath);
+                    }
+                }
+                catch (Exception queueEx)
+                {
+                    _logger.LogError(queueEx, "Failed to queue delete message for retry.");
+                }
             }
         }
+
     }
 }
