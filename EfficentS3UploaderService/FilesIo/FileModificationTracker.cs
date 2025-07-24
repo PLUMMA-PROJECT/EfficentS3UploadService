@@ -1,6 +1,6 @@
 ﻿using System.Collections.Concurrent;
 
-namespace EfficentS3UploadService
+namespace EfficentS3UploadService.FilesIo
 {
     public static class FileModificationTracker
     {

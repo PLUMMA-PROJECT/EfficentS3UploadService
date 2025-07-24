@@ -10,12 +10,14 @@ using System.Text.Json;
 
 namespace EfficentS3UploadService
 {
+    // This class handles AWS IoT Core MQTT communication over WebSocket,
+    // listens to update/delete events, and manages file operations with S3.
     internal class IotCoreViaWebsocket
     {
-        // Logger instance for logging information and errors
+        // Logger instance for application diagnostics
         private readonly ILogger<Worker> _logger;
 
-        // MQTT configuration variables
+        // MQTT and AWS configuration values
         private string _mqtt_region;
         private string _mqtt_endpoint;
         private string _mqtt_accessKey;
@@ -23,99 +25,90 @@ namespace EfficentS3UploadService
         private string _pathToWatch;
         private string _bucketName;
 
-        // MQTT client and options
+        // MQTT client and its connection options
         private IMqttClient _mqttClient;
         private MqttClientOptions _mqttClientOptions;
 
-        // Unique client identifier for MQTT connection
+        // Unique MQTT client identifier
         private string _clientId;
 
+        // Constructor that receives configuration and logger
         public IotCoreViaWebsocket(IConfiguration config, ILogger<Worker> logger)
         {
             _logger = logger;
-            // Load MQTT and AWS configuration from app settings
+
+            // Load settings from configuration
             _mqtt_region = config["AWS:MQTT_region"];
             _mqtt_endpoint = config["AWS:MQTT_endpoint"];
             _mqtt_accessKey = config["AWS:AccessKey"];
             _mqtt_secretKey = config["AWS:SecretKey"];
-            // Generate unique client ID for this connection instance
             _clientId = Guid.NewGuid().ToString();
-            // Path to watch for file changes
             _pathToWatch = config["FOLDER:Path"];
-            // S3 bucket name for uploads
             _bucketName = config["AWS:BucketName"];
 
             _logger.LogInformation("WSS MQTT AWS IoT Core listener initialized : region  {region} endpoint {endpoint}", _mqtt_region, _mqtt_endpoint);
         }
 
+        // Establishes connection to AWS IoT Core and subscribes to topics
         public async Task ConnectAndSubscribeAsync()
         {
-            // Generate a signed WebSocket URL with AWS SigV4 authentication for MQTT connection
+            // Create signed WebSocket URL using AWS SigV4 signing
             string wsUrl = AwsSigV4Signer.CreatePresignedUrl(_mqtt_accessKey, _mqtt_secretKey, _mqtt_region, _mqtt_endpoint);
-
             _logger.LogInformation("Try to connect to : {url}", wsUrl);
 
             var mqttFactory = new MqttFactory();
             _mqttClient = mqttFactory.CreateMqttClient();
 
-            // Build MQTT client options for WebSocket connection using MQTT 3.1.1 protocol
+            // Set MQTT client options for WebSocket connection
             _mqttClientOptions = new MqttClientOptionsBuilder()
-                .WithWebSocketServer(wsUrl)  // <-- Full WSS URL with path and query
+                .WithWebSocketServer(wsUrl)
                 .WithProtocolVersion(MqttProtocolVersion.V311)
                 .WithClientId(_clientId)
                 .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
-                .WithCleanSession(false) // Typical for WebSocket connections (non-persistent session)
+                .WithCleanSession(false)
                 .WithTimeout(TimeSpan.FromSeconds(15))
                 .WithoutPacketFragmentation()
                 .Build();
 
             _logger.LogInformation("Starting connection to broker with ClientId {clientId}", _clientId);
 
-            // Event handler when MQTT client successfully connects
+            // Event triggered after successful connection
             _mqttClient.ConnectedAsync += async e =>
             {
                 _logger.LogInformation("Connected to AWS IoT Core! Broker: {endpoint}", _mqtt_endpoint);
-                // Subscribe to the topic where file update notifications arrive
-                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder()
-                    .WithTopicFilter("EfficentS3UploadService/update")
-                    .Build());
 
-                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder()
-                    .WithTopicFilter("EfficentS3UploadService/delete")
-                    .Build());
-                // Publish an online status message after connection
+                // Subscribe to update and delete topics
+                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/update").Build());
+                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/delete").Build());
+
+                // Publish "online" message and any pending operations
                 await this.PublishOnlineMessage();
                 await this.PublishQueuedDeletesAsync();
                 await Worker.PublishQueuedNewfilesAsync();
+
                 _logger.LogInformation("Subscribed to topic 'EfficentS3UploadService/update' and published online message.");
-
-
-
-
-
-
             };
 
-            // Event handler for receiving MQTT application messages
+            // Event triggered when receiving MQTT messages
             _mqttClient.ApplicationMessageReceivedAsync += async e =>
             {
-                // Decode the message payload from MQTT message
                 string message = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);
                 string topic = e.ApplicationMessage.Topic;
+
                 _logger.LogInformation("Received new or updated file message: {message}", message);
                 _logger.LogInformation("Verifying if file is savable under path: {path}", _pathToWatch + message);
-                
+
                 switch (topic)
                 {
                     case "EfficentS3UploadService/update":
-                        // Create Amazon S3 client and file manager to handle download and processing
+                        // Handle update message: download and store the file from S3
                         var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
                         var fileManager = new FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
-                
-                        // Process the incoming message and download file if needed
                         await fileManager.ProcessMessageAndDownloadAsync(message);
                         break;
+
                     case "EfficentS3UploadService/delete":
+                        // Handle delete message
                         _logger.LogInformation("Received new request to delete file message: {message}", message);
                         await HandleDeleteMessage(message);
                         break;
@@ -126,27 +119,28 @@ namespace EfficentS3UploadService
                 }
             };
 
-            // Event handler for MQTT client disconnection
+            // Event triggered on disconnection
             _mqttClient.DisconnectedAsync += async e =>
             {
                 _logger.LogInformation("Disconnected from broker! Reason: {reason}, Exception: {exception}", e.Reason, e.Exception);
-                // Wait 5 seconds before attempting reconnect
+
+                // Wait before reconnecting
                 await Task.Delay(TimeSpan.FromSeconds(5));
+
                 try
                 {
-                    // Recreate the signed WebSocket URL and MQTT client options for reconnection
+                    // Rebuild connection URL and options
                     string wsUrl = AwsSigV4Signer.CreatePresignedUrl(_mqtt_accessKey, _mqtt_secretKey, _mqtt_region, _mqtt_endpoint);
                     _mqttClientOptions = new MqttClientOptionsBuilder()
-                       .WithWebSocketServer(wsUrl)  // <-- Full WSS URL with path and query
-                       .WithProtocolVersion(MqttProtocolVersion.V311)
-                       .WithClientId(_clientId)
-                       .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
-                       .WithCleanSession(false) // Typical for WebSocket connections (non-persistent session)
-                       .WithTimeout(TimeSpan.FromSeconds(15))
-                       .WithoutPacketFragmentation()
-                       .Build();
+                        .WithWebSocketServer(wsUrl)
+                        .WithProtocolVersion(MqttProtocolVersion.V311)
+                        .WithClientId(_clientId)
+                        .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
+                        .WithCleanSession(false)
+                        .WithTimeout(TimeSpan.FromSeconds(15))
+                        .WithoutPacketFragmentation()
+                        .Build();
 
-                    // Attempt to reconnect
                     await _mqttClient.ConnectAsync(_mqttClientOptions);
                 }
                 catch (Exception ex)
@@ -155,9 +149,9 @@ namespace EfficentS3UploadService
                 }
             };
 
+            // Initial connection with timeout
             try
             {
-                // Use a cancellation token to limit connection timeout to 30 seconds
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 await _mqttClient.ConnectAsync(_mqttClientOptions, cts.Token);
             }
@@ -167,15 +161,15 @@ namespace EfficentS3UploadService
             }
         }
 
-        // Publish a message to indicate the client is online
+        // Publishes a message signaling the client is online
         public async Task PublishOnlineMessage()
         {
             try
             {
                 _logger.LogInformation("(PublishOnlineMessage) Sending online signal message to endpoint {endpoint}", _mqtt_endpoint);
+
                 if (_mqttClient.IsConnected)
                 {
-                    // Prepare message payload with client ID and current timestamp
                     var messagePayload = JsonSerializer.Serialize(new
                     {
                         clientId = _clientId,
@@ -189,18 +183,8 @@ namespace EfficentS3UploadService
                         .WithRetainFlag(false)
                         .Build();
 
-                    _logger.LogInformation("(PublishOnlineMessage) Check if client IsConnected before publish online signal: {connected}", _mqttClient.IsConnected);
-                    try
-                    {
-                        // Publish the online status message to MQTT broker
-                        await _mqttClient.PublishAsync(message);
-                        _logger.LogInformation("(PublishOnlineMessage) Signal message published");
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "(PublishOnlineMessage) Error during PublishAsync");
-                    }
-                    _logger.LogInformation("(PublishOnlineMessage) PublishAsync called");
+                    await _mqttClient.PublishAsync(message);
+                    _logger.LogInformation("(PublishOnlineMessage) Signal message published");
                 }
                 else
                 {
@@ -212,8 +196,8 @@ namespace EfficentS3UploadService
                 _logger.LogInformation(ex.Message);
             }
         }
- 
 
+        // Publishes a delete command to the MQTT broker
         public async Task PublishDeleteMessage(string key)
         {
             _logger.LogInformation("Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
@@ -245,14 +229,12 @@ namespace EfficentS3UploadService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "MQTT publish failed. Queuing delete message: {key}", messagePayload);            
-                throw new InvalidOperationException("MQTT publish failed. Queuing delete message: "+ messagePayload);
+                _logger.LogWarning(ex, "MQTT publish failed. Queuing delete message: {key}", messagePayload);
+                throw new InvalidOperationException("MQTT publish failed. Queuing delete message: " + messagePayload);
             }
         }
 
-
-
-
+        // Re-publishes delete messages stored in a queue file
         public async Task PublishQueuedDeletesAsync()
         {
             if (!File.Exists(Worker.DeleteQueueFile)) return;
@@ -264,8 +246,7 @@ namespace EfficentS3UploadService
             {
                 try
                 {
-                    string relativeKey = Path.GetRelativePath(_pathToWatch, key)
-                            .Replace("\\", "/");
+                    string relativeKey = Path.GetRelativePath(_pathToWatch, key).Replace("\\", "/");
                     await this.PublishDeleteMessage(relativeKey);
                     _logger.LogInformation("(PublishQueuedDeletesAsync) Republished delete message: {key}", key);
                 }
@@ -279,59 +260,41 @@ namespace EfficentS3UploadService
             File.WriteAllLines(Worker.DeleteQueueFile, remaining);
         }
 
+        // Handles a delete message by removing or moving the file
         private async Task HandleDeleteMessage(string messagePayload)
         {
             try
             {
                 _logger.LogInformation("Handling delete message: {payload}", messagePayload);
 
-                // Parse JSON per ottenere la key da cancellare
                 var jsonDoc = JsonDocument.Parse(messagePayload);
-                if (!jsonDoc.RootElement.TryGetProperty("key", out var keyElement))
-                {
-                    _logger.LogWarning("Delete message JSON does not contain 'key' property.");
-                    return;
-                }
+                if (!jsonDoc.RootElement.TryGetProperty("key", out var keyElement)) return;
 
                 string relativeKey = keyElement.GetString();
-                if (string.IsNullOrEmpty(relativeKey))
-                {
-                    _logger.LogWarning("Delete message 'key' is null or empty.");
-                    return;
-                }
+                if (string.IsNullOrEmpty(relativeKey)) return;
 
-                // Costruisci il percorso assoluto del file da cancellare
                 string fileToDelete = Path.Combine(_pathToWatch, relativeKey.Replace('/', Path.DirectorySeparatorChar));
 
-                // Crea il client S3 e file manager
                 var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
                 var fileManager = new FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
 
-                // Usa il metodo MoveFileToRecycleBin invece di cancellare direttamente
                 bool movedToRecycleBin = fileManager.MoveFileToRecycleBin(fileToDelete);
 
                 if (movedToRecycleBin)
-                {
                     _logger.LogInformation("File moved to recycle bin: {file}", fileToDelete);
-                }
                 else
-                {
                     _logger.LogWarning("File could not be moved to recycle bin or does not exist: {file}", fileToDelete);
-                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error handling delete message.");
 
-                // In caso di errore, puoi accodare il messaggio per retry futuro
                 try
                 {
                     string fileKey = null;
                     var jsonDoc = JsonDocument.Parse(messagePayload);
                     if (jsonDoc.RootElement.TryGetProperty("key", out var keyElement))
-                    {
                         fileKey = keyElement.GetString();
-                    }
 
                     if (!string.IsNullOrEmpty(fileKey))
                     {
@@ -346,6 +309,5 @@ namespace EfficentS3UploadService
                 }
             }
         }
-
     }
 }

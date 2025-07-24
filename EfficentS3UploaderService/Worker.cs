@@ -1,4 +1,5 @@
 using EfficentS3UploadService;
+using EfficentS3UploadService.FilesIo;
 using System.IO;
 using System.Threading.Tasks;
 
