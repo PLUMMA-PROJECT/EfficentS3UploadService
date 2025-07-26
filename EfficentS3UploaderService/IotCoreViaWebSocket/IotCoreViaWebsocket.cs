@@ -24,6 +24,7 @@ namespace EfficentS3UploadService
         private string _mqtt_secretKey;
         private string _pathToWatch;
         private string _bucketName;
+  
 
         // MQTT client and its connection options
         private IMqttClient _mqttClient;
@@ -45,6 +46,7 @@ namespace EfficentS3UploadService
             _clientId = Guid.NewGuid().ToString();
             _pathToWatch = config["FOLDER:Path"];
             _bucketName = config["AWS:BucketName"];
+
 
             _logger.LogInformation("WSS MQTT AWS IoT Core listener initialized : region  {region} endpoint {endpoint}", _mqtt_region, _mqtt_endpoint);
         }
@@ -170,10 +172,25 @@ namespace EfficentS3UploadService
 
                 if (_mqttClient.IsConnected)
                 {
+                    var status = PersistentStatusHelper.LoadStatus();
+                    if (status != null && status.ClientId == _clientId)
+                    {
+                        _lastOnlineTimestamp = stored.LastOnlineTimestamp;
+                    }
+
+                    // Se non esiste timestamp salvato, allora è la prima volta
+                    if (_lastOnlineTimestamp == 0)
+                    {
+                        _lastOnlineTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                        PersistentStatusHelper.SaveStatus(_clientId, _lastOnlineTimestamp);
+                        _logger.LogInformation("First-time online signal, saving timestamp {ts}", _lastOnlineTimestamp);
+                    }
+
+                    // Crea il payload con il timestamp persistente
                     var messagePayload = JsonSerializer.Serialize(new
                     {
                         clientId = _clientId,
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                        timestamp = _lastOnlineTimestamp
                     });
 
                     var message = new MqttApplicationMessageBuilder()
