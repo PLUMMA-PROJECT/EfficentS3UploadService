@@ -20,6 +20,7 @@ public class Worker : BackgroundService
     private readonly Dictionary<string, DateTime> _fileExecutionTimestamps = new();
     private readonly object _lock = new();
     private readonly TimeSpan _debounceWindow = TimeSpan.FromSeconds(3);
+    private HashSet<string> _previousSnapshot = new();
 
 
     public Worker(ILogger<Worker> logger, ILogger<S3FileManager> s3Logger)
@@ -35,10 +36,33 @@ public class Worker : BackgroundService
         _logger.LogInformation("Worker initialized...");
     }
 
+
+    private HashSet<string> TakeSnapshot(string path)
+    {
+        var snapshot = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!Directory.Exists(path)) return snapshot;
+
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            {
+                snapshot.Add(Path.GetFullPath(file));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Snapshot scan failed");
+        }
+
+        return snapshot;
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("ExecuteAsync started.");
         // Initialize Watcher
+        _previousSnapshot = TakeSnapshot(_pathToWatch);
+
         _watcher = new FileSystemWatcher(_pathToWatch)
         {
             EnableRaisingEvents = true,
@@ -115,9 +139,28 @@ public class Worker : BackgroundService
             try
             {
                 _logger.LogInformation("(OnDeleted) File deleted: {file}", e.FullPath);
-                string relativeKey = Path.GetRelativePath(_pathToWatch, e.FullPath)
+                bool wasDirectory = _previousSnapshot.Any(path => path.StartsWith(e.FullPath + Path.DirectorySeparatorChar));
+                // Se è una directory, confronta snapshot per scoprire quali file sono stati eliminati
+                if (wasDirectory)
+                {
+                    var currentSnapshot = TakeSnapshot(_pathToWatch);
+                    var deletedFiles = _previousSnapshot.Except(currentSnapshot);
+
+                    foreach (var deletedFile in deletedFiles)
+                    {
+                        string relativeKey = Path.GetRelativePath(_pathToWatch, deletedFile)
+                                .Replace("\\", "/");
+
+                        _logger.LogInformation("(OnDeleted) Detected deleted file via snapshot: {file}", deletedFile);
+                        await _mqttClient.PublishDeleteMessage(relativeKey);
+                    }
+
+                    _previousSnapshot = currentSnapshot;
+                    return;
+                }
+                string relativeKeyPath = Path.GetRelativePath(_pathToWatch, e.FullPath)
                          .Replace("\\", "/");
-                await _mqttClient.PublishDeleteMessage(relativeKey);
+                await _mqttClient.PublishDeleteMessage(relativeKeyPath);
             }
             catch (Exception ex)
             {

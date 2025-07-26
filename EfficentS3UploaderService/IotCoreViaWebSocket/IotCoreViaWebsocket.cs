@@ -251,7 +251,9 @@ namespace EfficentS3UploadService
                     if (_mqttClient.IsConnected)
                     {
                         await _mqttClient.PublishAsync(message);
-                        _logger.LogInformation("Deleted message published: {key}", key);
+                    PersistentStatusHelper.SaveStatus(_clientId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                    _logger.LogInformation("Deleted message published: {key}", key);
+
                     }
                     else
                     {
@@ -293,6 +295,7 @@ namespace EfficentS3UploadService
                 {
                     await _mqttClient.PublishAsync(message);
                     _logger.LogInformation("Rename file message published: {oldkey} > {newkey}",oldKey,newKey);
+                    PersistentStatusHelper.SaveStatus(_clientId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 }
                 else
                 {
