@@ -172,10 +172,11 @@ namespace EfficentS3UploadService
 
                 if (_mqttClient.IsConnected)
                 {
-                    var status = PersistentStatusHelper.LoadStatus();
-                    if (status != null && status.ClientId == _clientId)
+                      long _lastOnlineTimestamp=0;
+                   var status = PersistentStatusHelper.LoadStatus();
+                    if (status != null)
                     {
-                        _lastOnlineTimestamp = stored.LastOnlineTimestamp;
+                        _lastOnlineTimestamp = status.LastOnlineTimestamp;
                     }
 
                     // Se non esiste timestamp salvato, allora è la prima volta
