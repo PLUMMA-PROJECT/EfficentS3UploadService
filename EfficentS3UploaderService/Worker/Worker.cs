@@ -20,7 +20,7 @@ public class Worker : BackgroundService
     private readonly Dictionary<string, DateTime> _fileExecutionTimestamps = new();
     private readonly object _lock = new();
     private readonly TimeSpan _debounceWindow = TimeSpan.FromSeconds(3);
-    private HashSet<string> _previousSnapshot = new();
+    private DirectoryChangeTracker _changeTracker;
 
 
     public Worker(ILogger<Worker> logger, ILogger<S3FileManager> s3Logger)
@@ -32,36 +32,18 @@ public class Worker : BackgroundService
         _uploader = new S3FileManager(config, _logger);
         // Initialize Event listener on IoT Core
         _mqttClient = new IotCoreViaWebsocket(config,_logger);
-        _pathToWatch = config["FOLDER:Path"];             
+        _pathToWatch = config["FOLDER:Path"];
+    
         _logger.LogInformation("Worker initialized...");
     }
 
-
-    private HashSet<string> TakeSnapshot(string path)
-    {
-        var snapshot = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!Directory.Exists(path)) return snapshot;
-
-        try
-        {
-            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-            {
-                snapshot.Add(Path.GetFullPath(file));
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Snapshot scan failed");
-        }
-
-        return snapshot;
-    }
+ 
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("ExecuteAsync started.");
         // Initialize Watcher
-        _previousSnapshot = TakeSnapshot(_pathToWatch);
+        _changeTracker = new DirectoryChangeTracker(_pathToWatch);
 
         _watcher = new FileSystemWatcher(_pathToWatch)
         {
@@ -77,8 +59,7 @@ public class Worker : BackgroundService
 
         _logger.LogInformation("Started watching {path}", _pathToWatch);
         await _mqttClient.ConnectAndSubscribeAsync();
-        await Task.Delay(TimeSpan.FromSeconds(30));
-        await _mqttClient.PublishOnlineMessage();
+        await Task.Delay(TimeSpan.FromSeconds(30));        
         await Task.Delay(Timeout.Infinite, stoppingToken);
         await PublishQueuedNewfilesAsync();
     }
@@ -139,28 +120,12 @@ public class Worker : BackgroundService
             try
             {
                 _logger.LogInformation("(OnDeleted) File deleted: {file}", e.FullPath);
-                bool wasDirectory = _previousSnapshot.Any(path => path.StartsWith(e.FullPath + Path.DirectorySeparatorChar));
-                // Se è una directory, confronta snapshot per scoprire quali file sono stati eliminati
-                if (wasDirectory)
-                {
-                    var currentSnapshot = TakeSnapshot(_pathToWatch);
-                    var deletedFiles = _previousSnapshot.Except(currentSnapshot);
+              
 
-                    foreach (var deletedFile in deletedFiles)
-                    {
-                        string relativeKey = Path.GetRelativePath(_pathToWatch, deletedFile)
-                                .Replace("\\", "/");
-
-                        _logger.LogInformation("(OnDeleted) Detected deleted file via snapshot: {file}", deletedFile);
-                        await _mqttClient.PublishDeleteMessage(relativeKey);
-                    }
-
-                    _previousSnapshot = currentSnapshot;
-                    return;
-                }
-                string relativeKeyPath = Path.GetRelativePath(_pathToWatch, e.FullPath)
-                         .Replace("\\", "/");
+                // se è un file singolo
+                string relativeKeyPath = Path.GetRelativePath(_pathToWatch, e.FullPath).Replace("\\", "/");
                 await _mqttClient.PublishDeleteMessage(relativeKeyPath);
+                _changeTracker.RefreshSnapshot();
             }
             catch (Exception ex)
             {
@@ -227,7 +192,7 @@ public class Worker : BackgroundService
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
         if (ShouldIgnore(e.FullPath)) return;
-        _logger.LogInformation("File changed: {file}", e.FullPath);
+        _logger.LogInformation("(OnChanged) File changed: {file}", e.FullPath);
         _ = HandleFileChangeAsync(e.FullPath);
     }
 
@@ -238,11 +203,23 @@ public class Worker : BackgroundService
 
             if (FileModificationTracker.WasRecentlyModifiedByMqtt(fullPath))
             {
-                return; // Skip upload
+               return; // Skip upload
             }
             if (Directory.Exists(fullPath))
             {
                 _logger.LogInformation("Skipping directory change: {dir}", fullPath);
+                if (_changeTracker.WasPathDirectory(fullPath))
+                {
+                    var deletedFiles = _changeTracker.GetDeletedFiles();
+
+                    foreach (var deletedFile in deletedFiles)
+                    {
+                        string relativeKey = Path.GetRelativePath(_pathToWatch, deletedFile).Replace("\\", "/");
+                        _logger.LogInformation("(OnDeleted) Detected deleted file via snapshot: {file}", deletedFile);
+                        await _mqttClient.PublishDeleteMessage(relativeKey);
+                    }
+                    return;
+                }
                 return;
             }
 

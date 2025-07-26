@@ -64,7 +64,7 @@ namespace EfficentS3UploadService
             // Set MQTT client options for WebSocket connection
             _mqttClientOptions = new MqttClientOptionsBuilder()
                 .WithWebSocketServer(wsUrl)
-                .WithProtocolVersion(MqttProtocolVersion.V311)
+                .WithProtocolVersion(MqttProtocolVersion.V311)                
                 .WithClientId(_clientId)
                 .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
                 .WithCleanSession(false)
