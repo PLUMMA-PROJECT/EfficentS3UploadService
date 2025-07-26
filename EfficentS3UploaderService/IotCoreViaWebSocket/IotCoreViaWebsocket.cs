@@ -172,8 +172,8 @@ namespace EfficentS3UploadService
 
                 if (_mqttClient.IsConnected)
                 {
-                      long _lastOnlineTimestamp=0;
-                   var status = PersistentStatusHelper.LoadStatus();
+                    long _lastOnlineTimestamp=0;
+                    var status = PersistentStatusHelper.LoadStatus();
                     if (status != null)
                     {
                         _lastOnlineTimestamp = status.LastOnlineTimestamp;
@@ -194,6 +194,7 @@ namespace EfficentS3UploadService
                         timestamp = _lastOnlineTimestamp
                     });
 
+
                     var message = new MqttApplicationMessageBuilder()
                         .WithTopic($"EfficentS3UploadService/online/{_clientId}")
                         .WithPayload(messagePayload)
@@ -202,7 +203,11 @@ namespace EfficentS3UploadService
                         .Build();
 
                     await _mqttClient.PublishAsync(message);
+
                     _logger.LogInformation("(PublishOnlineMessage) Signal message published");
+                    _lastOnlineTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    PersistentStatusHelper.SaveStatus(_clientId, _lastOnlineTimestamp);
+                    _logger.LogInformation("Saving last online timestamp {ts}", _lastOnlineTimestamp);
                 }
                 else
                 {

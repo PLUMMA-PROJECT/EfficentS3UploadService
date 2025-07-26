@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("EfficentS3UploadService")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+0c54f43cf81add7e8c7b692cdc34314b97d74d9d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+cfeef8a57f70388703fdc0b9a4d37b16dbbef7ce")]
 [assembly: System.Reflection.AssemblyProductAttribute("EfficentS3UploadService")]
 [assembly: System.Reflection.AssemblyTitleAttribute("EfficentS3UploadService")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
