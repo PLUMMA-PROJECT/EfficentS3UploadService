@@ -80,15 +80,18 @@ namespace EfficentS3UploadService
                 _logger.LogInformation("Connected to AWS IoT Core! Broker: {endpoint}", _mqtt_endpoint);
 
                 // Subscribe to update and delete topics
-                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/update").Build());
-                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/delete").Build());
+                
+                
 
                 // Publish "online" message and any pending operations
                 await this.PublishOnlineMessage();
                 await this.PublishQueuedDeletesAsync();
+                await this.PublishQueuedRenamesAsync();
                 await Worker.Worker.PublishQueuedNewfilesAsync();
-
-                _logger.LogInformation("Subscribed to topic 'EfficentS3UploadService/update' and published online message.");
+                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/update").Build());
+                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/delete").Build());
+                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/rename").Build());
+                _logger.LogInformation("Subscribed to topics and published online message.");
             };
 
             // Event triggered when receiving MQTT messages
@@ -97,8 +100,7 @@ namespace EfficentS3UploadService
                 string message = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);
                 string topic = e.ApplicationMessage.Topic;
 
-                _logger.LogInformation("Received new or updated file message: {message}", message);
-                _logger.LogInformation("Verifying if file is savable under path: {path}", _pathToWatch + message);
+                _logger.LogInformation("MQTT Received new message: {message} in topic {topic}", message,topic);                
 
                 switch (topic)
                 {
@@ -114,7 +116,11 @@ namespace EfficentS3UploadService
                         _logger.LogInformation("Received new request to delete file message: {message}", message);
                         await HandleDeleteMessage(message);
                         break;
-
+                    case "EfficentS3UploadService/rename":
+                        // Handle delete message
+                        _logger.LogInformation("Received new request to rename file message: {message}", message);
+                        await HandleRenameMessage(message);
+                        break;
                     default:
                         _logger.LogWarning("Received message on unhandled topic: {topic}", topic);
                         break;
@@ -223,16 +229,59 @@ namespace EfficentS3UploadService
         // Publishes a delete command to the MQTT broker
         public async Task PublishDeleteMessage(string key)
         {
-            _logger.LogInformation("Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
+
+            
+                _logger.LogInformation("Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
+
+                var messagePayload = JsonSerializer.Serialize(new
+                {
+                    clientId = _clientId,
+                    key = key
+                });
+
+                var message = new MqttApplicationMessageBuilder()
+                    .WithTopic("EfficentS3UploadService/delete")
+                    .WithPayload(messagePayload)
+                    .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                    .WithRetainFlag(false)
+                    .Build();
+
+                try
+                {
+                    if (_mqttClient.IsConnected)
+                    {
+                        await _mqttClient.PublishAsync(message);
+                        _logger.LogInformation("Deleted message published: {key}", key);
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("MQTT client is disconnected.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "MQTT publish failed. Queuing delete message: {key}", messagePayload);
+                    throw new InvalidOperationException("MQTT publish failed. Queuing delete message: " + messagePayload);
+                }
+            }
+        
+
+
+        // Publishes a rename file command to the MQTT broker
+        public async Task PublishRenameMessage(string oldKey,string newKey, long _timestamp)
+        {
+            _logger.LogInformation("Sending rename file message to endpoint {endpoint}", _mqtt_endpoint);
 
             var messagePayload = JsonSerializer.Serialize(new
             {
                 clientId = _clientId,
-                key = key
+                old_key = oldKey,
+                new_key = newKey,
+                timestamp = _timestamp
             });
 
             var message = new MqttApplicationMessageBuilder()
-                .WithTopic("EfficentS3UploadService/delete")
+                .WithTopic("EfficentS3UploadService/rename")
                 .WithPayload(messagePayload)
                 .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
                 .WithRetainFlag(false)
@@ -243,7 +292,7 @@ namespace EfficentS3UploadService
                 if (_mqttClient.IsConnected)
                 {
                     await _mqttClient.PublishAsync(message);
-                    _logger.LogInformation("Deleted message published: {key}", key);
+                    _logger.LogInformation("Rename file message published: {oldkey} > {newkey}",oldKey,newKey);
                 }
                 else
                 {
@@ -252,10 +301,11 @@ namespace EfficentS3UploadService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "MQTT publish failed. Queuing delete message: {key}", messagePayload);
+                _logger.LogWarning(ex, "MQTT publish failed. Queuing rename file message: {key}", messagePayload);
                 throw new InvalidOperationException("MQTT publish failed. Queuing delete message: " + messagePayload);
             }
         }
+
 
         // Re-publishes delete messages stored in a queue file
         public async Task PublishQueuedDeletesAsync()
@@ -281,6 +331,34 @@ namespace EfficentS3UploadService
             }
 
             PersistentQueueHelper.WriteItemList(Worker.Worker.DeleteQueueFile, remaining);
+        }
+
+        // Re-publishes delete messages stored in a queue file
+        public async Task PublishQueuedRenamesAsync()
+        {
+            if (!File.Exists(Worker.Worker.RenameFileQueue)) return;
+
+            List<PersistentQueueHelper.QueueEntry> lines = PersistentQueueHelper.ReadQueue(Worker.Worker.RenameFileQueue);
+            var remaining = new List<PersistentQueueHelper.QueueEntry>();
+
+            foreach (PersistentQueueHelper.QueueEntry key in lines)
+            {
+                try
+                {
+                    string oldKey = Path.GetRelativePath(_pathToWatch, key.Item).Split(">")[0].Replace("\\", "/");
+                    string newKey = Path.GetRelativePath(_pathToWatch, key.Item).Split(">")[1].Replace("\\", "/");
+                    long timestamp = new DateTimeOffset(key.Timestamp.ToUniversalTime()).ToUnixTimeSeconds();
+                    await this.PublishRenameMessage(oldKey,newKey,timestamp);
+                    _logger.LogInformation("(PublishQueuedRenamesAsync) Republished renaming file message: {key}", key);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "(PublishQueuedRenamesAsync) Retry failed for: {key}", key);
+                    remaining.Add(key);
+                }
+            }
+
+            PersistentQueueHelper.WriteQueue(Worker.Worker.RenameFileQueue, remaining);
         }
 
         // Handles a delete message by removing or moving the file
@@ -314,6 +392,8 @@ namespace EfficentS3UploadService
 
                 try
                 {
+
+                 
                     string fileKey = null;
                     var jsonDoc = JsonDocument.Parse(messagePayload);
                     if (jsonDoc.RootElement.TryGetProperty("key", out var keyElement))
@@ -322,13 +402,80 @@ namespace EfficentS3UploadService
                     if (!string.IsNullOrEmpty(fileKey))
                     {
                         string fullPath = Path.Combine(_pathToWatch, fileKey.Replace('/', Path.DirectorySeparatorChar));
-                        await File.AppendAllLinesAsync(Worker.Worker.DeleteQueueFile, new[] { fullPath });
+                        PersistentQueueHelper.EnqueueToJsonFile(Worker.Worker.DeleteQueueFile, fullPath);
                         _logger.LogInformation("Queued delete file for retry: {file}", fullPath);
                     }
                 }
                 catch (Exception queueEx)
                 {
                     _logger.LogError(queueEx, "Failed to queue delete message for retry.");
+                }
+            }
+        }
+
+
+
+        // Handles a delete message by removing or moving the file
+        private async Task HandleRenameMessage(string messagePayload)
+        {
+            try
+            {
+                _logger.LogInformation("Handling rename message: {payload}", messagePayload);
+
+                var jsonDoc = JsonDocument.Parse(messagePayload);
+                if (!jsonDoc.RootElement.TryGetProperty("old_key", out var oldKeyElement)) return;
+                if (!jsonDoc.RootElement.TryGetProperty("new_key", out var newKeyElement)) return;
+                if (!jsonDoc.RootElement.TryGetProperty("timestamp", out var timestampElement)) return;
+
+                string oldKey = oldKeyElement.GetString();
+                if (string.IsNullOrEmpty(oldKey)) return;
+
+                string newKey = newKeyElement.GetString();
+                if (string.IsNullOrEmpty(newKey)) return;
+
+                if (!timestampElement.TryGetInt64(out long timestamp)) return;
+                DateTime utcDateTime = DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime;
+
+                string fileToRename = Path.Combine(_pathToWatch, oldKey.Replace('/', Path.DirectorySeparatorChar));
+                string newFileToHave = Path.Combine(_pathToWatch, newKey.Replace('/', Path.DirectorySeparatorChar));
+
+                var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
+                var fileManager = new FilesIo.FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
+
+                bool renamed = fileManager.RenameFileIfNewer(fileToRename, newFileToHave, utcDateTime);
+
+                if (renamed)
+                    _logger.LogInformation("File {file} renamed into {newkey}", fileToRename,newKey);
+                else
+                    _logger.LogWarning("File could not be renamed or does not exist: {file}", fileToRename);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling renaming message.");
+                try
+                {
+                    var jsonDoc = JsonDocument.Parse(messagePayload);
+                    if (!jsonDoc.RootElement.TryGetProperty("old_key", out var oldKeyElement)) return;
+                    if (!jsonDoc.RootElement.TryGetProperty("new_key", out var newKeyElement)) return;
+                    if (!jsonDoc.RootElement.TryGetProperty("timestamp", out var timestampElement)) return;
+
+                    string oldKey = oldKeyElement.GetString();
+                    if (string.IsNullOrEmpty(oldKey)) return;
+
+                    string newKey = newKeyElement.GetString();
+                    if (string.IsNullOrEmpty(newKey)) return;
+
+                    if (!timestampElement.TryGetInt64(out long timestamp)) return;
+                    string fileToRename = Path.Combine(_pathToWatch, oldKey.Replace('/', Path.DirectorySeparatorChar));
+                    string newFileToHave = Path.Combine(_pathToWatch, newKey.Replace('/', Path.DirectorySeparatorChar));
+                
+                    PersistentQueueHelper.EnqueueToJsonFile(Worker.Worker.RenameFileQueue, fileToRename+">"+newFileToHave);
+                    _logger.LogInformation("Queued file renaming for retry: {file}", fileToRename + ">" + newFileToHave);
+
+                }
+                catch (Exception queueEx)
+                {
+                    _logger.LogError(queueEx, "Failed to queue renaming message for retry.");
                 }
             }
         }

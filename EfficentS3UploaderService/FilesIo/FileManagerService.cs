@@ -16,6 +16,7 @@ namespace EfficentS3UploadService.FilesIo
         private readonly string _basePath;
         private readonly IAmazonS3 _s3Client;
         private readonly string _bucketName;
+        public static Dictionary<string, DateTime> _recentlyRenamedFiles = new();
 
         // Constructor initializes required dependencies
         public FileManagerService(ILogger<Worker.Worker> logger, string basePath, IAmazonS3 s3Client, string bucketName)
@@ -203,6 +204,17 @@ namespace EfficentS3UploadService.FilesIo
         {
             try
             {
+                if (_recentlyRenamedFiles.TryGetValue(filePath, out DateTime renameTime))
+                {
+                    if ((DateTime.UtcNow - renameTime).TotalSeconds < 1)
+                    {
+                        // È un falso "delete" dopo una rename
+                        _logger.LogInformation("(MoveFileToRecycleBin) Ignorato delete dopo rename: {Path}", filePath);
+                       // _recentlyRenamedFiles.Remove(filePath);
+                        return true;
+                    }
+                }
+
                 if (File.Exists(filePath))
                 {
                     FileSystem.DeleteFile(
@@ -225,5 +237,56 @@ namespace EfficentS3UploadService.FilesIo
                 return false;
             }
         }
+
+
+        /// <summary>
+        /// Rinomina un file solo se il timestamp passato è più recente del file esistente.
+        /// </summary>
+        /// <param name="currentFilePath">Il percorso del file esistente da rinominare.</param>
+        /// <param name="newFilePath">Il nuovo percorso (nome) che si vuole assegnare al file.</param>
+        /// <param name="timestamp">Il timestamp di confronto per decidere se rinominare.</param>
+        /// <returns>True se il file è stato rinominato, false altrimenti.</returns>
+        public bool RenameFileIfNewer(string currentFilePath, string newFilePath, DateTime timestamp)
+        {
+            try
+            {
+                if (!File.Exists(currentFilePath))
+                {
+                    _logger.LogWarning("File da rinominare non esiste: {currentFilePath}", currentFilePath);
+                    return false;
+                }
+
+                DateTime fileLastWriteTime = File.GetLastWriteTimeUtc(currentFilePath);
+
+                if (timestamp <= fileLastWriteTime)
+                {
+                    _logger.LogInformation("Il timestamp fornito non è più recente. File non rinominato: {currentFilePath}", currentFilePath);
+                    return false;
+                }
+
+                // Verifica se il file di destinazione esiste già e lo elimina per evitare errori
+                if (File.Exists(newFilePath))
+                {
+                    _logger.LogWarning("File di destinazione esistente attenzione: {newFilePath}", newFilePath);
+                    if (IsFileLocked(newFilePath))
+                    {
+                        _logger.LogWarning("File di destinazione è in uso e non può essere sovrascritto: {newFilePath}", newFilePath);
+                        return false;
+                    }
+                    File.Delete(newFilePath);
+                }
+
+                File.Move(currentFilePath, newFilePath);
+                _recentlyRenamedFiles[currentFilePath] = DateTime.UtcNow;
+                _logger.LogInformation("File rinominato da {currentFilePath} a {newFilePath}", currentFilePath, newFilePath);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Errore durante il rinominare il file {currentFilePath} in {newFilePath}", currentFilePath, newFilePath);
+                return false;
+            }
+        }
+
     }
 }

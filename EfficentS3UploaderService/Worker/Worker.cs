@@ -10,25 +10,25 @@ namespace EfficentS3UploadService.Worker;
 public class Worker : BackgroundService
 {
     private static ILogger<Worker> _logger;
-    private readonly ILogger<S3Uploader> _s3Logger;
+    private readonly ILogger<S3FileManager> _s3Logger;
     
 
     private FileSystemWatcher? _watcher;
     private static string _pathToWatch = @"C:\Temp";
-    private static S3Uploader _uploader;
+    private static S3FileManager _uploader;
     private readonly IotCoreViaWebsocket _mqttClient;
     private readonly Dictionary<string, DateTime> _fileExecutionTimestamps = new();
     private readonly object _lock = new();
     private readonly TimeSpan _debounceWindow = TimeSpan.FromSeconds(3);
 
 
-    public Worker(ILogger<Worker> logger, ILogger<S3Uploader> s3Logger)
+    public Worker(ILogger<Worker> logger, ILogger<S3FileManager> s3Logger)
     {
       IConfiguration config=  new ConfigurationBuilder()
             .AddJsonFile("appsettings.json")
             .Build();
         _logger = logger;
-        _uploader = new S3Uploader(config, _logger);
+        _uploader = new S3FileManager(config, _logger);
         // Initialize Event listener on IoT Core
         _mqttClient = new IotCoreViaWebsocket(config,_logger);
         _pathToWatch = config["FOLDER:Path"];             
@@ -49,6 +49,7 @@ public class Worker : BackgroundService
         _watcher.Created += OnCreated;
         _watcher.Changed += OnChanged;
         _watcher.Deleted += OnDeleted;
+        _watcher.Renamed += OnRenamed;
 
         _logger.LogInformation("Started watching {path}", _pathToWatch);
         await _mqttClient.ConnectAndSubscribeAsync();
@@ -58,29 +59,70 @@ public class Worker : BackgroundService
         await PublishQueuedNewfilesAsync();
     }
 
+
+    private async void OnRenamed(object sender, RenamedEventArgs e)
+    {
+        if (ShouldIgnore(e.FullPath)) return;
+
+        _logger.LogInformation("File renamed from {OldName} to {NewName}", e.OldFullPath, e.FullPath);
+
+        try
+        {
+            // Chiave S3 vecchia
+            var oldKey = Path.GetRelativePath(_pathToWatch, e.OldFullPath).Replace("\\", "/");
+            // Chiave S3 nuova
+            var newKey = Path.GetRelativePath(_pathToWatch, e.FullPath).Replace("\\", "/");
+
+            await _mqttClient.PublishRenameMessage(oldKey, newKey, DateTimeOffset.UtcNow.ToUnixTimeSeconds() );
+
+            _logger.LogInformation("S3 file renamed from {OldKey} to {NewKey}", oldKey, newKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to handle renamed file from {OldFile} to {NewFile}", e.OldFullPath, e.FullPath);
+           
+
+            EnqueueRenamePath(e.OldFullPath,e.FullPath);
+
+        }
+    }
+
+
     private void OnCreated(object sender, FileSystemEventArgs e)
     {
         if (ShouldIgnore(e.FullPath)) return;
-        _logger.LogInformation("File created: {file}", e.FullPath);
+        _logger.LogInformation("(OnCreated) File created: {file}", e.FullPath);
         _ = HandleFileChangeAsync(e.FullPath);
     }
 
     private void OnDeleted(object sender, FileSystemEventArgs e)
     {
+
+        if (FilesIo.FileManagerService._recentlyRenamedFiles.TryGetValue(e.FullPath, out DateTime renameTime))
+        {
+            if ((DateTime.UtcNow - renameTime).TotalSeconds < 1)
+            {
+                // È un falso "delete" dopo una rename
+                _logger.LogInformation("(MoveFileToRecycleBin) Ignorato delete dopo rename: {Path}",e.FullPath);
+                FilesIo.FileManagerService._recentlyRenamedFiles.Remove(e.FullPath);       
+                return;
+            }
+        }
+       
         if (ShouldIgnore(e.FullPath)) return;
         _ = Task.Run(async () =>
         {
             try
             {
-                _logger.LogInformation("File deleted: {file}", e.FullPath);
+                _logger.LogInformation("(OnDeleted) File deleted: {file}", e.FullPath);
                 string relativeKey = Path.GetRelativePath(_pathToWatch, e.FullPath)
                          .Replace("\\", "/");
                 await _mqttClient.PublishDeleteMessage(relativeKey);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error handling deleted file: {file}", e.FullPath);
-                _logger.LogInformation("Delete queue path is: {path}", DeleteQueueFile);
+                _logger.LogError(ex, "(OnDeleted) Error handling deleted file: {file}", e.FullPath);
+                _logger.LogInformation("(OnDeleted) Delete queue path is: {path}", DeleteQueueFile);
 
                 EnqueueDeletePath(e.FullPath);
             }
@@ -89,6 +131,22 @@ public class Worker : BackgroundService
 
     public static readonly string DeleteQueueFile = Path.Combine(AppContext.BaseDirectory, "delete_queue.json");
     public static readonly string NewFileQueue = Path.Combine(AppContext.BaseDirectory, "newfile_queue.json");
+    public static readonly string RenameFileQueue = Path.Combine(AppContext.BaseDirectory, "rename_queue.json");
+
+
+    // Chiamato quando la connessione fallisce
+    private void EnqueueRenamePath(string oldFullPath, string fullPath)
+    {
+        try
+        {
+            _logger.LogInformation("(EnqueueRenamePath) Enqueuing file to renamed file queue: {file}", fullPath);
+            PersistentQueueHelper.EnqueueToJsonFile(RenameFileQueue, oldFullPath+">"+fullPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "(EnqueueRenamePath) Failed to enqueue renamed file lete path: {file}", fullPath);
+        }
+    }
 
 
     // Chiamato quando la connessione fallisce

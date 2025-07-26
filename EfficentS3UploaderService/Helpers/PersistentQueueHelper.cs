@@ -71,6 +71,15 @@ namespace EfficentS3UploadService.Helpers
                         WriteQueue(Path.Combine(AppContext.BaseDirectory, "delete_queue.json"), toDelete);
                     }
                 }
+                else if (filePath.Equals(Path.Combine(AppContext.BaseDirectory, "rename_queue.json"), StringComparison.OrdinalIgnoreCase))
+                {
+                    var toRename = ReadQueue(Path.Combine(AppContext.BaseDirectory, "rename_queue.json"));
+                  
+
+                        toRename.Add(new QueueEntry { Item = newItem, Timestamp = now });
+                        WriteQueue(Path.Combine(AppContext.BaseDirectory, "rename_queue.json"), toRename);
+                    }
+                
                 else
                 {
                     throw new ArgumentException("filePath must be either (DELETION) " +
