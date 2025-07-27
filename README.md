@@ -82,3 +82,7 @@ cd .\EfficentS3UploadService\
 Start-Service -Name "EfficentS3UploadService"
 Stop-Service -Name "EfficentS3UploadService"
 ```
+
+
+In automount di una unità VHD  C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -command "Mount-DiskImage -ImagePath C:\TEMP\acadwin.vhd –PassThru | Get-Disk | Get-Partition | Set-Partition -NewDriveLetter M"
+vedi https://woshub.com/auto-mount-vhd-at-startup/
