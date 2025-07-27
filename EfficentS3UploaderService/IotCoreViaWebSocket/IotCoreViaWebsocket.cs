@@ -7,6 +7,7 @@ using MQTTnet.Protocol;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace EfficentS3UploadService
 {
@@ -43,9 +44,26 @@ namespace EfficentS3UploadService
             _mqtt_endpoint = config["AWS:MQTT_endpoint"];
             _mqtt_accessKey = config["AWS:AccessKey"];
             _mqtt_secretKey = config["AWS:SecretKey"];
-            _clientId = Guid.NewGuid().ToString();
+            
             _pathToWatch = config["FOLDER:Path"];
             _bucketName = config["AWS:BucketName"];
+
+
+            // Percorso del file persistente per il clientId
+            string clientIdPath = Path.Combine(AppContext.BaseDirectory, "clientid.txt");
+
+            if (File.Exists(clientIdPath))
+            {
+                _clientId = File.ReadAllText(clientIdPath).Trim();
+                _logger.LogInformation("Loaded existing ClientId from file: {clientId}", _clientId);
+            }
+            else
+            {
+                _clientId = Guid.NewGuid().ToString();
+                File.WriteAllText(clientIdPath, _clientId);
+                _logger.LogInformation("Generated new ClientId and saved to file: {clientId}", _clientId);
+            }
+
 
 
             _logger.LogInformation("WSS MQTT AWS IoT Core listener initialized : region  {region} endpoint {endpoint}", _mqtt_region, _mqtt_endpoint);
@@ -62,8 +80,7 @@ namespace EfficentS3UploadService
             _logger.LogInformation("Try to connect to : {url}", wsUrl);
 
             var mqttFactory = new MqttFactory();
-            _mqttClient = mqttFactory.CreateMqttClient();
-            _clientId = Guid.NewGuid().ToString();
+            _mqttClient = mqttFactory.CreateMqttClient();           
 
             // Set MQTT client options for WebSocket connection
             _mqttClientOptions = new MqttClientOptionsBuilder()

@@ -83,7 +83,15 @@ public class Worker : BackgroundService
 
     private async void OnRenamed(object sender, RenamedEventArgs e)
     {
-        if (ShouldIgnore(e.FullPath)) return;
+       if (ShouldIgnore(e.OldFullPath))
+        {
+            _logger.LogInformation("(OnRenamed) File ignorato old: {file}", e.FullPath); return;
+        } 
+        if (ShouldIgnore(e.FullPath))
+        {
+            _logger.LogInformation("(OnRenamed) File ignorato new: {file}", e.FullPath); return;
+        }
+       
 
         _logger.LogInformation("(OnRenamed) File renamed from {OldName} to {NewName}", e.OldFullPath, e.FullPath);
 
@@ -111,14 +119,22 @@ public class Worker : BackgroundService
 
     private void OnCreated(object sender, FileSystemEventArgs e)
     {
-        if (ShouldIgnore(e.FullPath)) return;
+        if (ShouldIgnore(e.FullPath))
+        {
+            _logger.LogInformation("(OnCreated) File ignorato : {file}", e.FullPath); return;
+        }
         _logger.LogInformation("(OnCreated) File created: {file}", e.FullPath);
         _ = HandleFileChangeAsync(e.FullPath);
         _changeTracker.RefreshSnapshot();
     }
 
     private void OnDeleted(object sender, FileSystemEventArgs e)
-    {      
+    {  
+        if (ShouldIgnore(e.FullPath))
+        {
+            _logger.LogInformation("(OnDeleted) File ignorato : {file}", e.FullPath); return;
+        }
+        ;   
         if (FilesIo.FileManagerService._recentlyRenamedFiles.TryGetValue(e.FullPath, out DateTime renameTime))
         {
             if ((DateTime.UtcNow - renameTime).TotalSeconds < 1)
@@ -130,7 +146,7 @@ public class Worker : BackgroundService
             }
         }
        
-        if (ShouldIgnore(e.FullPath)) return;
+       
         _ = Task.Run(async () =>
         {
             try
@@ -220,7 +236,10 @@ public class Worker : BackgroundService
 
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
-        if (ShouldIgnore(e.FullPath)) return;
+        if (ShouldIgnore(e.FullPath))
+        {
+            _logger.LogInformation("(OnChanged) File ignorato : {file}", e.FullPath); return;
+        }
         _logger.LogInformation("(OnChanged) File changed: {file}", e.FullPath);
         _ = HandleFileChangeAsync(e.FullPath);
         _changeTracker.RefreshSnapshot();
@@ -358,7 +377,63 @@ public class Worker : BackgroundService
 
     private bool ShouldIgnore(string path)
     {
-        return path.Contains("$RECYCLE.BIN", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("Thumbs.db", StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            string fileName = Path.GetFileName(path);
+            string lowerPath = path.ToLowerInvariant();
+
+            // Ignora cartelle di sistema note
+            if (lowerPath.Contains("$recycle.bin"))
+                return true;
+
+            if (lowerPath.Contains("system volume information"))
+                return true;
+
+            if (lowerPath.Contains("windows"))
+                return true;
+
+            // Se è un file e NON ha estensione, ignora
+            if (File.Exists(path) && !Path.HasExtension(fileName))
+                return true;
+
+            // File e cartelle da ignorare per nome (case-insensitive)
+            string[] ignoredFiles = new[]
+            {
+            "thumbs.db",
+            "desktop.ini",
+            "ehthumbs.db",
+            "iconcache.db",
+            "ntuser.dat",
+            "ntuser.dat.log1",
+            "ntuser.dat.log2",
+            "pagefile.sys",
+            "swapfile.sys",
+            "hiberfil.sys"
+        };
+
+            if (ignoredFiles.Any(f => fileName.Equals(f, StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            // Ignora file temporanei Windows:
+            // - che finiscono con .tmp o .~tmp (es. file.tmp, file.~tmp)
+            // - che iniziano con ~ (es. ~file.tmp, ~$file.doc)
+            if (fileName.StartsWith("~") ||
+                fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".~tmp", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Ignora file e cartelle con attributi Hidden o System
+            var attr = File.GetAttributes(path);
+            if (attr.HasFlag(FileAttributes.Hidden) || attr.HasFlag(FileAttributes.System))
+                return true;
+        }
+        catch
+        {
+            // Se il file o cartella non esiste più o non è accessibile, evita crash e non ignorare
+        }
+
+        return false;
     }
+
+
 }
