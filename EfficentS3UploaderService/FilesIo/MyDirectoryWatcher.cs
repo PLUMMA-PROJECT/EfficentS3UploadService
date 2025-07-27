@@ -70,15 +70,14 @@ namespace EfficentS3UploadService.FilesIo
         {
             _logger.LogInformation("[WATCHING] {Directory}", _directoryToWatch);
 
-            // 1️⃣ Primo snapshot iniziale SENZA rilevare modifiche
-            _previousSnapshot = CaptureSnapshot(_directoryToWatch);
+            _previousSnapshot = await CaptureSnapshotAsync(_directoryToWatch, stoppingToken);
 
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
                     _logger.LogInformation("[WATCHING] Detecting changes in {Directory}", _directoryToWatch);
-                    var currentSnapshot = CaptureSnapshot(_directoryToWatch);
+                    var currentSnapshot = await CaptureSnapshotAsync(_directoryToWatch, stoppingToken);
                     DetectChanges(_previousSnapshot, currentSnapshot);
                     _previousSnapshot = currentSnapshot;
                 }
@@ -91,33 +90,66 @@ namespace EfficentS3UploadService.FilesIo
             }
         }
 
-        private Dictionary<string, FileSnapshot> CaptureSnapshot(string directory)
+
+        private async Task<Dictionary<string, FileSnapshot>> CaptureSnapshotAsync(string directory, CancellationToken cancellationToken)
         {
             var snapshot = new Dictionary<string, FileSnapshot>(StringComparer.OrdinalIgnoreCase);
+            var nowUtc = DateTime.UtcNow;
+            var stabilityThreshold = TimeSpan.FromSeconds(10);
+            int maxRetries = 3;
+            int delayMs = 100; // 100 ms tra i retry
 
             foreach (var filePath in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
             {
                 if (ShouldIgnore(filePath))
                     continue;
 
-                try
+                int attempt = 0;
+                bool success = false;
+                FileInfo? info = null;
+
+                while (attempt < maxRetries && !success)
                 {
-                    var info = new FileInfo(filePath);
-                    snapshot[filePath] = new FileSnapshot
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    try
                     {
-                        FullPath = filePath,
-                        LastWriteTimeUtc = info.LastWriteTimeUtc,
-                        Length = info.Length
-                    };
+                        info = new FileInfo(filePath);
+
+                        // Salta file troppo recenti (ancora in scrittura)
+                        if (nowUtc - info.LastWriteTimeUtc < stabilityThreshold)
+                            break;
+
+                        success = true; // lettura riuscita
+                    }
+                    catch (IOException)
+                    {
+                        _logger.LogWarning("File inaccessibile (in uso?): {Path}, tentativo {Attempt}", filePath, attempt + 1);
+                        attempt++;
+                        if (attempt < maxRetries)
+                            await Task.Delay(delayMs, cancellationToken);
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        _logger.LogWarning("File non autorizzato: {Path}", filePath);
+                        break; // non ha senso ritentare
+                    }
                 }
-                catch
+
+                if (!success || info == null)
+                    continue;
+
+                snapshot[filePath] = new FileSnapshot
                 {
-                    // Ignora file inaccessibili
-                }
+                    FullPath = filePath,
+                    LastWriteTimeUtc = info.LastWriteTimeUtc,
+                    Length = info.Length
+                };
             }
 
             return snapshot;
         }
+
 
         private void DetectChanges(
       Dictionary<string, FileSnapshot> previous,
