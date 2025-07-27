@@ -76,7 +76,7 @@ namespace EfficentS3UploadService.FilesIo
             {
                 try
                 {
-                    _logger.LogInformation("[WATCHING] Detecting changes in {Directory}", _directoryToWatch);
+                    _logger.LogDebug("[WATCHING] Detecting changes in {Directory}", _directoryToWatch);
                     var currentSnapshot = await CaptureSnapshotAsync(_directoryToWatch, stoppingToken);
                     DetectChanges(_previousSnapshot, currentSnapshot);
                     _previousSnapshot = currentSnapshot;
