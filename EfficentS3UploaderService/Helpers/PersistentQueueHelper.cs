@@ -74,10 +74,8 @@ namespace EfficentS3UploadService.Helpers
                 else if (filePath.Equals(Path.Combine(AppContext.BaseDirectory, "rename_queue.json"), StringComparison.OrdinalIgnoreCase))
                 {
                     var toRename = ReadQueue(Path.Combine(AppContext.BaseDirectory, "rename_queue.json"));
-                  
-
-                        toRename.Add(new QueueEntry { Item = newItem, Timestamp = now });
-                        WriteQueue(Path.Combine(AppContext.BaseDirectory, "rename_queue.json"), toRename);
+                    toRename.Add(new QueueEntry { Item = newItem, Timestamp = now });
+                    WriteQueue(Path.Combine(AppContext.BaseDirectory, "rename_queue.json"), toRename);
                     }
                 
                 else

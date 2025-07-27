@@ -44,6 +44,19 @@ public class Worker : BackgroundService
     {
         _logger.LogInformation("ExecuteAsync started.");
         // Initialize Watcher
+
+        // Aspetta che la cartella esista
+        while (!Directory.Exists(_pathToWatch))
+        {
+            _logger.LogWarning("Path to watch does not exist: {path}. Retrying in 5 seconds...", _pathToWatch);
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+
+            if (stoppingToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("Cancellation requested before path became available.");
+                return;
+            }
+        }
         _changeTracker = new DirectoryChangeTracker(_pathToWatch);
 
         _watcher = new FileSystemWatcher(_pathToWatch)

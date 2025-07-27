@@ -1,4 +1,10 @@
 C:\PROJECTS\EfficentS3UploadService\publish\appsettings.Development.json
 C:\PROJECTS\EfficentS3UploadService\publish\appsettings.json
+C:\PROJECTS\EfficentS3UploadService\publish\publish\appsettings.Development.json
+C:\PROJECTS\EfficentS3UploadService\publish\publish\appsettings.json
+C:\PROJECTS\EfficentS3UploadService\publish\publish\delete_queue.json
+C:\PROJECTS\EfficentS3UploadService\publish\publish\newfile_queue.json
+C:\PROJECTS\EfficentS3UploadService\publish\publish\online_status.json
+C:\PROJECTS\EfficentS3UploadService\publish\publish\rename_queue.json
 C:\PROJECTS\EfficentS3UploadService\publish\EfficentS3UploadService.pdb
 C:\PROJECTS\EfficentS3UploadService\publish\EfficentS3UploadService.exe

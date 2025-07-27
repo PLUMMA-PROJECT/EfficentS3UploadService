@@ -61,3 +61,6 @@ C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Debug\net8.0\a
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Debug\net8.0\publish\appsettings.Development.json
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Debug\net8.0\publish\appsettings.json
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Debug\net8.0\publish\online_status.json
+C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Debug\net8.0\publish\delete_queue.json
+C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Debug\net8.0\publish\newfile_queue.json
+C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Debug\net8.0\publish\rename_queue.json

@@ -63,6 +63,7 @@ namespace EfficentS3UploadService
 
             var mqttFactory = new MqttFactory();
             _mqttClient = mqttFactory.CreateMqttClient();
+            _clientId = Guid.NewGuid().ToString();
 
             // Set MQTT client options for WebSocket connection
             _mqttClientOptions = new MqttClientOptionsBuilder()
@@ -359,8 +360,16 @@ namespace EfficentS3UploadService
             {
                 try
                 {
-                    string oldKey = Path.GetRelativePath(_pathToWatch, key.Item).Split(">")[0].Replace("\\", "/");
-                    string newKey = Path.GetRelativePath(_pathToWatch, key.Item).Split(">")[1].Replace("\\", "/");
+                    string[] parts = key.Item.Split('>');
+                    if (parts.Length != 2)
+                    {
+                        _logger.LogWarning("Formato non valido in key.Item: {item}", key.Item);
+                        remaining.Add(key);
+                        continue;
+                    }
+
+                    string oldKey = Path.GetRelativePath(_pathToWatch, parts[0]).Replace("\\", "/");
+                    string newKey = Path.GetRelativePath(_pathToWatch, parts[1]).Replace("\\", "/");
                     long timestamp = new DateTimeOffset(key.Timestamp.ToUniversalTime()).ToUnixTimeSeconds();
                     await this.PublishRenameMessage(oldKey, newKey, timestamp);
                     _logger.LogDebug("(PublishQueuedRenamesAsync) Republished renaming file message: {key}", key);
