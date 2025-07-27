@@ -24,7 +24,7 @@ namespace EfficentS3UploadService
         private string _mqtt_secretKey;
         private string _pathToWatch;
         private string _bucketName;
-  
+
 
         // MQTT client and its connection options
         private IMqttClient _mqttClient;
@@ -67,7 +67,7 @@ namespace EfficentS3UploadService
             // Set MQTT client options for WebSocket connection
             _mqttClientOptions = new MqttClientOptionsBuilder()
                 .WithWebSocketServer(wsUrl)
-                .WithProtocolVersion(MqttProtocolVersion.V311)                
+                .WithProtocolVersion(MqttProtocolVersion.V311)
                 .WithClientId(_clientId)
                 .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
                 .WithCleanSession(false)
@@ -83,8 +83,8 @@ namespace EfficentS3UploadService
                 _logger.LogInformation("Connected to AWS IoT Core! Broker: {endpoint}", _mqtt_endpoint);
 
                 // Subscribe to update and delete topics
-                
-                
+
+
 
                 // Publish "online" message and any pending operations
                 await this.PublishOnlineMessage();
@@ -100,7 +100,7 @@ namespace EfficentS3UploadService
             // Event triggered when receiving MQTT messages
             _mqttClient.ApplicationMessageReceivedAsync += async e =>
             {
-                string message = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);                
+                string message = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);
                 string topic = e.ApplicationMessage.Topic;
                 var helper = new MessageHelper(message);
 
@@ -111,8 +111,8 @@ namespace EfficentS3UploadService
                     return; // Ignore messages from other clients
                 }
 
-                _logger.LogInformation("MQTT Received new message: {message} in topic {topic}", message,topic);                
-                
+                _logger.LogInformation("MQTT Received new message: {message} in topic {topic}", message, topic);
+
                 switch (topic)
                 {
                     case "EfficentS3UploadService/update":
@@ -189,7 +189,7 @@ namespace EfficentS3UploadService
 
                 if (_mqttClient.IsConnected)
                 {
-                    long _lastOnlineTimestamp=0;
+                    long _lastOnlineTimestamp = 0;
                     var status = PersistentStatusHelper.LoadStatus();
                     if (status != null)
                     {
@@ -207,7 +207,7 @@ namespace EfficentS3UploadService
                     // Crea il payload con il timestamp persistente
                     var messagePayload = JsonSerializer.Serialize(new
                     {
-                        clientId = _clientId,
+                        mqttclientid = _clientId,
                         timestamp = _lastOnlineTimestamp
                     });
 
@@ -241,47 +241,47 @@ namespace EfficentS3UploadService
         public async Task PublishDeleteMessage(string key)
         {
 
-            
-                _logger.LogInformation("(PublishDeleteMessage ) Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
 
-                var messagePayload = JsonSerializer.Serialize(new
+            _logger.LogInformation("(PublishDeleteMessage ) Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
+
+            var messagePayload = JsonSerializer.Serialize(new
+            {
+                mqttclientid = _clientId,
+                key = key
+            });
+
+            var message = new MqttApplicationMessageBuilder()
+                .WithTopic("EfficentS3UploadService/delete")
+                .WithPayload(messagePayload)
+                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                .WithRetainFlag(false)
+                .Build();
+
+            try
+            {
+                if (_mqttClient.IsConnected)
                 {
-                    mqttclientid = _clientId,
-                    key = key
-                });
-
-                var message = new MqttApplicationMessageBuilder()
-                    .WithTopic("EfficentS3UploadService/delete")
-                    .WithPayload(messagePayload)
-                    .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
-                    .WithRetainFlag(false)
-                    .Build();
-
-                try
-                {
-                    if (_mqttClient.IsConnected)
-                    {
-                        await _mqttClient.PublishAsync(message);
+                    await _mqttClient.PublishAsync(message);
                     PersistentStatusHelper.SaveStatus(_clientId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                     _logger.LogDebug("(PublishDeleteMessage) Deleted message published: {key}", key);
 
-                    }
-                    else
-                    {
-                        throw new InvalidOperationException("MQTT client is disconnected.");
-                    }
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger.LogWarning(ex, "MQTT publish failed. Queuing delete message: {key}", messagePayload);
-                    throw new InvalidOperationException("MQTT publish failed. Queuing delete message: " + messagePayload);
+                    throw new InvalidOperationException("MQTT client is disconnected.");
                 }
             }
-        
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "MQTT publish failed. Queuing delete message: {key}", messagePayload);
+                throw new InvalidOperationException("MQTT publish failed. Queuing delete message: " + messagePayload);
+            }
+        }
+
 
 
         // Publishes a rename file command to the MQTT broker
-        public async Task PublishRenameMessage(string oldKey,string newKey, long _timestamp)
+        public async Task PublishRenameMessage(string oldKey, string newKey, long _timestamp)
         {
             _logger.LogInformation("(PublishRenameMessage)  Sending rename file message to endpoint {endpoint}", _mqtt_endpoint);
 
@@ -305,7 +305,7 @@ namespace EfficentS3UploadService
                 if (_mqttClient.IsConnected)
                 {
                     await _mqttClient.PublishAsync(message);
-                    _logger.LogDebug("(PublishRenameMessage) Rename file message published: {oldkey} > {newkey}", oldKey,newKey);
+                    _logger.LogDebug("(PublishRenameMessage) Rename file message published: {oldkey} > {newkey}", oldKey, newKey);
                     PersistentStatusHelper.SaveStatus(_clientId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 }
                 else
@@ -326,7 +326,7 @@ namespace EfficentS3UploadService
         {
             if (!File.Exists(Worker.Worker.DeleteQueueFile)) return;
 
-            List<string> lines =  PersistentQueueHelper.ReadItemList(Worker.Worker.DeleteQueueFile);            
+            List<string> lines = PersistentQueueHelper.ReadItemList(Worker.Worker.DeleteQueueFile);
             var remaining = new List<string>();
 
             foreach (string key in lines)
@@ -362,7 +362,7 @@ namespace EfficentS3UploadService
                     string oldKey = Path.GetRelativePath(_pathToWatch, key.Item).Split(">")[0].Replace("\\", "/");
                     string newKey = Path.GetRelativePath(_pathToWatch, key.Item).Split(">")[1].Replace("\\", "/");
                     long timestamp = new DateTimeOffset(key.Timestamp.ToUniversalTime()).ToUnixTimeSeconds();
-                    await this.PublishRenameMessage(oldKey,newKey,timestamp);
+                    await this.PublishRenameMessage(oldKey, newKey, timestamp);
                     _logger.LogDebug("(PublishQueuedRenamesAsync) Republished renaming file message: {key}", key);
                 }
                 catch (Exception ex)
@@ -407,7 +407,7 @@ namespace EfficentS3UploadService
                 try
                 {
 
-                 
+
                     string fileKey = null;
                     var jsonDoc = JsonDocument.Parse(messagePayload);
                     if (jsonDoc.RootElement.TryGetProperty("key", out var keyElement))
@@ -452,16 +452,42 @@ namespace EfficentS3UploadService
 
                 string fileToRename = Path.Combine(_pathToWatch, oldKey.Replace('/', Path.DirectorySeparatorChar));
                 string newFileToHave = Path.Combine(_pathToWatch, newKey.Replace('/', Path.DirectorySeparatorChar));
-
+                _logger.LogDebug("(HandleRenameMessage) Handling rename paths: {fileToRename} > {newFileToHave}", fileToRename, newFileToHave);
                 var s3Client = new AmazonS3Client(_mqtt_accessKey, _mqtt_secretKey, Amazon.RegionEndpoint.GetBySystemName(_mqtt_region));
                 var fileManager = new FilesIo.FileManagerService(_logger, _pathToWatch, s3Client, _bucketName);
-
-                bool renamed = fileManager.RenameFileIfNewer(fileToRename, newFileToHave, utcDateTime);
-
+                bool renamed = false;
+                if (File.Exists(fileToRename))
+                {
+                    renamed = fileManager.RenameFileIfNewer(fileToRename, newFileToHave, utcDateTime);
+                }
+                else
+                if (Directory.Exists(fileToRename))
+                {
+                    DateTime dirLastWriteTime = Directory.GetLastWriteTimeUtc(fileToRename);
+                    if (utcDateTime > dirLastWriteTime)
+                    {
+                        if (Directory.Exists(newFileToHave))
+                        {
+                            _logger.LogWarning("Directory di destinazione già esistente: {path}", newFileToHave);
+                            return;
+                        }
+                        Directory.Move(fileToRename, newFileToHave);
+                        _logger.LogInformation("Directory rinominata da {old} a {new}", fileToRename, newFileToHave);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Timestamp non più recente, directory non rinominata: {dir}", fileToRename);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Il path da rinominare non esiste né come file né come cartella: {path}", fileToRename);
+                }
                 if (renamed)
-                    _logger.LogInformation("File {file} renamed into {newkey}", fileToRename,newKey);
+                    _logger.LogInformation("File {file} renamed into {newkey}", fileToRename, newKey);
                 else
                     _logger.LogWarning("File could not be renamed or does not exist: {file}", fileToRename);
+
             }
             catch (Exception ex)
             {
@@ -482,8 +508,8 @@ namespace EfficentS3UploadService
                     if (!timestampElement.TryGetInt64(out long timestamp)) return;
                     string fileToRename = Path.Combine(_pathToWatch, oldKey.Replace('/', Path.DirectorySeparatorChar));
                     string newFileToHave = Path.Combine(_pathToWatch, newKey.Replace('/', Path.DirectorySeparatorChar));
-                
-                    PersistentQueueHelper.EnqueueToJsonFile(Worker.Worker.RenameFileQueue, fileToRename+">"+newFileToHave);
+
+                    PersistentQueueHelper.EnqueueToJsonFile(Worker.Worker.RenameFileQueue, fileToRename + ">" + newFileToHave);
                     _logger.LogInformation("Queued file renaming for retry: {file}", fileToRename + ">" + newFileToHave);
 
                 }

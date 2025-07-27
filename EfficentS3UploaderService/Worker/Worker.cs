@@ -255,7 +255,7 @@ public class Worker : BackgroundService
                 if (await IsFileReadyAsync(fullPath))
                     break;
 
-                _logger.LogWarning("(HandleFileChangeAsync) File {file} is still in use. Retrying in 1500ms...", fullPath);
+                _logger.LogWarning("(HandleFileChangeAsync) File {file} is still in use. Retrying in 500ms...", fullPath);
                 await Task.Delay(500);
             }
 
