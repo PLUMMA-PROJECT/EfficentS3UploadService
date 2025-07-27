@@ -13,12 +13,13 @@ public class S3FileManager
     private readonly string _bucketName;
     private readonly string _accessKey;
     private readonly string _secretKey;
+    private readonly string _clientId;
     private static AmazonS3Client _s3Client;
     // Logger instance
     private readonly ILogger<Worker.Worker> _logger;
 
     // Constructor: loads AWS config and sets logger
-    public S3FileManager(IConfiguration config, ILogger<Worker.Worker> logger)
+    public S3FileManager(IConfiguration config, ILogger<Worker.Worker> logger, string clientId)
     {
         _logger = logger;
         _logger.LogInformation("S3Uploader initialized...");
@@ -28,6 +29,7 @@ public class S3FileManager
         _secretKey = config["AWS:SecretKey"];
         var regionEndpoint = RegionEndpoint.GetBySystemName(_region);
         _s3Client = new AmazonS3Client(_accessKey, _secretKey, regionEndpoint);
+        _clientId = clientId;
     }
 
     // Uploads a local file to S3 with custom SHA256 metadata and optional throttling
@@ -35,8 +37,6 @@ public class S3FileManager
     {
         try
         {
-       
-          
             var fileTransferUtility = new TransferUtility(_s3Client);
 
             // Calcola SHA256 locale
@@ -63,7 +63,7 @@ public class S3FileManager
             if (!objectExists)
             {
                 // ✅ Caso 1: file non esiste su S3 → fai upload
-                _logger.LogInformation("Oggetto '{keyName}' non esiste su S3. Upload...",keyName);
+                _logger.LogDebug("(UploadFileToS3) Oggetto '{keyName}' non esiste su S3. Upload...", keyName);
                 await Upload(filePath, keyName, localSha256, fileTransferUtility);
                 return;
             }
@@ -72,7 +72,7 @@ public class S3FileManager
             if (!metadataResponse.Metadata.Keys.Contains("x-amz-meta-sha256"))
             {
                 // ❌ Errore se il file esiste ma non ha metadato SHA256
-                _logger.LogError("Oggetto '{keyName}' esiste ma manca 'x-amz-meta-sha256'. Upload vietato.",keyName);
+                _logger.LogError("(UploadFileToS3) Oggetto '{keyName}' esiste ma manca 'x-amz-meta-sha256'. Upload vietato.", keyName);
                 throw new InvalidOperationException($"File '{keyName}' su S3 non contiene metadato SHA256.");
             }
 
@@ -81,7 +81,7 @@ public class S3FileManager
             if (remoteSha256 == localSha256)
             {
                 // ✅ Caso 3: hash uguale → skip upload
-                _logger.LogInformation("SHA256 identico per '{keyName}'. Nessun upload necessario.", keyName);
+                _logger.LogDebug("SHA256 identico per '{keyName}'. Nessun upload necessario.", keyName);
                 return;
             }
 
@@ -91,12 +91,12 @@ public class S3FileManager
 
             if (localLastModified > s3LastModified)
             {
-                _logger.LogInformation("SHA256 diverso e file locale più recente. Upload...");
+                _logger.LogDebug("SHA256 diverso e file locale più recente. Upload...");
                 await Upload(filePath, keyName, localSha256, fileTransferUtility);
             }
             else
             {
-                _logger.LogInformation("SHA256 diverso ma file locale NON più recente. Skip upload.");
+                _logger.LogDebug("SHA256 diverso ma file locale NON più recente. Skip upload.");
             }
         }
         catch (Exception ex)
@@ -117,7 +117,8 @@ public class S3FileManager
             AutoCloseStream = true
         };
 
-        uploadRequest.Metadata.Add("x-amz-meta-sha256", sha256Hash);
+        uploadRequest.Metadata.Add("sha256", sha256Hash);
+        uploadRequest.Metadata.Add("mqttclientid", this._clientId);
 
         uploadRequest.UploadProgressEvent += (sender, e) =>
         {
@@ -128,7 +129,7 @@ public class S3FileManager
         };
 
         await fileTransferUtility.UploadAsync(uploadRequest);
-        _logger.LogInformation("Upload completato per '{keyName}'.", keyName);
+        _logger.LogInformation("(Upload) Upload completato per '{keyName}' - client id  {clientId}.", keyName,this._clientId);
     }
 
 

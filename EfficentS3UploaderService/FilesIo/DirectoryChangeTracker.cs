@@ -31,7 +31,13 @@ namespace EfficentS3UploadService.FilesIo
         private HashSet<string> TakeSnapshot(string path)
         {
             var allFiles = Directory.GetFiles(path, "*", SearchOption.AllDirectories);
-            return new HashSet<string>(allFiles.Select(f => Path.GetFullPath(f)), StringComparer.OrdinalIgnoreCase);
+            var allDirs = Directory.GetDirectories(path, "*", SearchOption.AllDirectories);
+
+            var allPaths = allFiles
+                .Concat(allDirs)
+                .Select(p => Path.GetFullPath(p));
+
+            return new HashSet<string>(allPaths, StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -67,5 +73,17 @@ namespace EfficentS3UploadService.FilesIo
 
             return _previousSnapshot.Any(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
         }
-     }
+
+        public IEnumerable<string> GetFilesUnderPath(string fullPath)
+        {
+            fullPath = Path.GetFullPath(fullPath);
+            string prefix = fullPath.EndsWith(Path.DirectorySeparatorChar.ToString())
+                ? fullPath
+                : fullPath + Path.DirectorySeparatorChar;
+
+            return _previousSnapshot
+                .Where(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+    }
 }

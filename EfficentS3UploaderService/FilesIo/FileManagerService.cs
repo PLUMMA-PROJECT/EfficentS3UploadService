@@ -48,7 +48,7 @@ namespace EfficentS3UploadService.FilesIo
 
                 // Retrieve the SHA256 metadata stored in S3
                 string? s3Sha256 = await GetS3ObjectSha256MetadataAsync(s3Key);
-
+                await Task.Delay(1500);
                 // Check if the local file exists and is already up-to-date
                 if (File.Exists(localPath))
                 {
@@ -57,11 +57,11 @@ namespace EfficentS3UploadService.FilesIo
 
                     if (!string.IsNullOrEmpty(s3Sha256) && localSha256 == s3Sha256)
                     {
-                        _logger.LogInformation("Local file is already up to date (SHA256 match), skipping download: {localPath}", localPath);
+                        _logger.LogInformation("(ProcessMessageAndDownloadAsync) Local file is already up to date (SHA256 match), skipping download: {localPath}", localPath);
                         return;
                     }
                 }
-
+                await Task.Delay(1500);
                 // Ensure the local directory exists
                 Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
 
@@ -69,13 +69,13 @@ namespace EfficentS3UploadService.FilesIo
                 byte[] s3Content = await DownloadFromS3Async(s3Key);
                 if (s3Content == null)
                 {
-                    _logger.LogWarning("File not found on S3 for key: {s3Key}", s3Key);
+                    _logger.LogWarning("(ProcessMessageAndDownloadAsync) File not found on S3 for key: {s3Key}", s3Key);
                     return;
                 }
 
                 // Mark the file as modified by MQTT (for downstream logic)
                 FileModificationTracker.MarkAsModifiedByMqtt(localPath);
-
+                await Task.Delay(1500);
                 // Write the file to the local file system
                 SaveOrUpdateFile(localPath, s3Content);
             }
@@ -103,12 +103,12 @@ namespace EfficentS3UploadService.FilesIo
             }
             catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                _logger.LogWarning("File not found in S3: {key}", key);
+                _logger.LogWarning("(DownloadFromS3Async) File not found in S3: {key}", key);
                 return null;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error while downloading from S3: {key}", key);
+                _logger.LogError(ex, "(DownloadFromS3Async) Error while downloading from S3: {key}", key);
                 return null;
             }
         }
@@ -222,18 +222,18 @@ namespace EfficentS3UploadService.FilesIo
                         UIOption.OnlyErrorDialogs,
                         RecycleOption.SendToRecycleBin
                     );
-                    _logger.LogInformation("File moved to Recycle Bin: {filePath}", filePath);
+                    _logger.LogInformation("(MoveFileToRecycleBin) File moved to Recycle Bin: {filePath}", filePath);
                     return true;
                 }
                 else
                 {
-                    _logger.LogWarning("File to delete does not exist: {filePath}", filePath);
-                    return true;
+                    _logger.LogWarning("(MoveFileToRecycleBin) File to delete does not exist: {filePath}", filePath);
+                    return false;
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error moving file to Recycle Bin: {filePath}", filePath);
+                _logger.LogError(ex, "(MoveFileToRecycleBin) Error moving file to Recycle Bin: {filePath}", filePath);
                 return false;
             }
         }

@@ -51,6 +51,9 @@ namespace EfficentS3UploadService
             _logger.LogInformation("WSS MQTT AWS IoT Core listener initialized : region  {region} endpoint {endpoint}", _mqtt_region, _mqtt_endpoint);
         }
 
+        public string ClientId => _clientId;
+
+
         // Establishes connection to AWS IoT Core and subscribes to topics
         public async Task ConnectAndSubscribeAsync()
         {
@@ -97,11 +100,19 @@ namespace EfficentS3UploadService
             // Event triggered when receiving MQTT messages
             _mqttClient.ApplicationMessageReceivedAsync += async e =>
             {
-                string message = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);
+                string message = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);                
                 string topic = e.ApplicationMessage.Topic;
+                var helper = new MessageHelper(message);
+
+                string clientId = helper.GetValue("mqttclientid");
+                if (clientId == _clientId)
+                {
+                    _logger.LogDebug("Received message from same client {clientId}, ignoring", clientId);
+                    return; // Ignore messages from other clients
+                }
 
                 _logger.LogInformation("MQTT Received new message: {message} in topic {topic}", message,topic);                
-
+                
                 switch (topic)
                 {
                     case "EfficentS3UploadService/update":
@@ -113,12 +124,12 @@ namespace EfficentS3UploadService
 
                     case "EfficentS3UploadService/delete":
                         // Handle delete message
-                        _logger.LogInformation("Received new request to delete file message: {message}", message);
+                        _logger.LogDebug("Received new request to delete file message: {message}", message);
                         await HandleDeleteMessage(message);
                         break;
                     case "EfficentS3UploadService/rename":
                         // Handle delete message
-                        _logger.LogInformation("Received new request to rename file message: {message}", message);
+                        _logger.LogDebug("Received new request to rename file message: {message}", message);
                         await HandleRenameMessage(message);
                         break;
                     default:
@@ -174,7 +185,7 @@ namespace EfficentS3UploadService
         {
             try
             {
-                _logger.LogInformation("(PublishOnlineMessage) Sending online signal message to endpoint {endpoint}", _mqtt_endpoint);
+                _logger.LogDebug("(PublishOnlineMessage) Sending online signal message to endpoint {endpoint}", _mqtt_endpoint);
 
                 if (_mqttClient.IsConnected)
                 {
@@ -190,7 +201,7 @@ namespace EfficentS3UploadService
                     {
                         _lastOnlineTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                         PersistentStatusHelper.SaveStatus(_clientId, _lastOnlineTimestamp);
-                        _logger.LogInformation("First-time online signal, saving timestamp {ts}", _lastOnlineTimestamp);
+                        _logger.LogInformation("(PublishOnlineMessage) First-time online signal, saving timestamp {ts}", _lastOnlineTimestamp);
                     }
 
                     // Crea il payload con il timestamp persistente
@@ -210,10 +221,10 @@ namespace EfficentS3UploadService
 
                     await _mqttClient.PublishAsync(message);
 
-                    _logger.LogInformation("(PublishOnlineMessage) Signal message published");
+                    _logger.LogDebug("(PublishOnlineMessage) Signal message published");
                     _lastOnlineTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                     PersistentStatusHelper.SaveStatus(_clientId, _lastOnlineTimestamp);
-                    _logger.LogInformation("Saving last online timestamp {ts}", _lastOnlineTimestamp);
+                    _logger.LogDebug("Saving last online timestamp {ts}", _lastOnlineTimestamp);
                 }
                 else
                 {
@@ -231,11 +242,11 @@ namespace EfficentS3UploadService
         {
 
             
-                _logger.LogInformation("Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
+                _logger.LogInformation("(PublishDeleteMessage ) Sending delete message to endpoint {endpoint}", _mqtt_endpoint);
 
                 var messagePayload = JsonSerializer.Serialize(new
                 {
-                    clientId = _clientId,
+                    mqttclientid = _clientId,
                     key = key
                 });
 
@@ -252,7 +263,7 @@ namespace EfficentS3UploadService
                     {
                         await _mqttClient.PublishAsync(message);
                     PersistentStatusHelper.SaveStatus(_clientId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                    _logger.LogInformation("Deleted message published: {key}", key);
+                    _logger.LogDebug("(PublishDeleteMessage) Deleted message published: {key}", key);
 
                     }
                     else
@@ -272,11 +283,11 @@ namespace EfficentS3UploadService
         // Publishes a rename file command to the MQTT broker
         public async Task PublishRenameMessage(string oldKey,string newKey, long _timestamp)
         {
-            _logger.LogInformation("Sending rename file message to endpoint {endpoint}", _mqtt_endpoint);
+            _logger.LogInformation("(PublishRenameMessage)  Sending rename file message to endpoint {endpoint}", _mqtt_endpoint);
 
             var messagePayload = JsonSerializer.Serialize(new
             {
-                clientId = _clientId,
+                mqttclientid = _clientId,
                 old_key = oldKey,
                 new_key = newKey,
                 timestamp = _timestamp
@@ -294,7 +305,7 @@ namespace EfficentS3UploadService
                 if (_mqttClient.IsConnected)
                 {
                     await _mqttClient.PublishAsync(message);
-                    _logger.LogInformation("Rename file message published: {oldkey} > {newkey}",oldKey,newKey);
+                    _logger.LogDebug("(PublishRenameMessage) Rename file message published: {oldkey} > {newkey}", oldKey,newKey);
                     PersistentStatusHelper.SaveStatus(_clientId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 }
                 else
@@ -324,7 +335,7 @@ namespace EfficentS3UploadService
                 {
                     string relativeKey = Path.GetRelativePath(_pathToWatch, key).Replace("\\", "/");
                     await this.PublishDeleteMessage(relativeKey);
-                    _logger.LogInformation("(PublishQueuedDeletesAsync) Republished delete message: {key}", key);
+                    _logger.LogDebug("(PublishQueuedDeletesAsync) Republished delete message: {key}", key);
                 }
                 catch (Exception ex)
                 {
@@ -352,7 +363,7 @@ namespace EfficentS3UploadService
                     string newKey = Path.GetRelativePath(_pathToWatch, key.Item).Split(">")[1].Replace("\\", "/");
                     long timestamp = new DateTimeOffset(key.Timestamp.ToUniversalTime()).ToUnixTimeSeconds();
                     await this.PublishRenameMessage(oldKey,newKey,timestamp);
-                    _logger.LogInformation("(PublishQueuedRenamesAsync) Republished renaming file message: {key}", key);
+                    _logger.LogDebug("(PublishQueuedRenamesAsync) Republished renaming file message: {key}", key);
                 }
                 catch (Exception ex)
                 {
@@ -385,13 +396,13 @@ namespace EfficentS3UploadService
                 bool movedToRecycleBin = fileManager.MoveFileToRecycleBin(fileToDelete);
 
                 if (movedToRecycleBin)
-                    _logger.LogInformation("File moved to recycle bin: {file}", fileToDelete);
+                    _logger.LogInformation("(HandleDeleteMessage) File moved to recycle bin: {file}", fileToDelete);
                 else
-                    _logger.LogWarning("File could not be moved to recycle bin or does not exist: {file}", fileToDelete);
+                    _logger.LogWarning("(HandleDeleteMessage) File could not be moved to recycle bin or does not exist: {file}", fileToDelete);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error handling delete message.");
+                _logger.LogError(ex, "(HandleDeleteMessage) Error handling delete message.");
 
                 try
                 {
@@ -406,12 +417,12 @@ namespace EfficentS3UploadService
                     {
                         string fullPath = Path.Combine(_pathToWatch, fileKey.Replace('/', Path.DirectorySeparatorChar));
                         PersistentQueueHelper.EnqueueToJsonFile(Worker.Worker.DeleteQueueFile, fullPath);
-                        _logger.LogInformation("Queued delete file for retry: {file}", fullPath);
+                        _logger.LogInformation("(HandleDeleteMessage) Queued delete file for retry: {file}", fullPath);
                     }
                 }
                 catch (Exception queueEx)
                 {
-                    _logger.LogError(queueEx, "Failed to queue delete message for retry.");
+                    _logger.LogError(queueEx, "(HandleDeleteMessage) Failed to queue delete message for retry.");
                 }
             }
         }
@@ -423,7 +434,7 @@ namespace EfficentS3UploadService
         {
             try
             {
-                _logger.LogInformation("Handling rename message: {payload}", messagePayload);
+                _logger.LogInformation("(HandleRenameMessage) Handling rename message: {payload}", messagePayload);
 
                 var jsonDoc = JsonDocument.Parse(messagePayload);
                 if (!jsonDoc.RootElement.TryGetProperty("old_key", out var oldKeyElement)) return;

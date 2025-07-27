@@ -5,6 +5,7 @@ IConfiguration config = new ConfigurationBuilder()
           .Build();
 String _LogFilePath = config["LOGS:LogsFile"];
 Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
     .WriteTo.File(
         Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _LogFilePath)
     )

@@ -21,7 +21,7 @@ public class Worker : BackgroundService
     private readonly object _lock = new();
     private readonly TimeSpan _debounceWindow = TimeSpan.FromSeconds(3);
     private DirectoryChangeTracker _changeTracker;
-
+    
 
     public Worker(ILogger<Worker> logger, ILogger<S3FileManager> s3Logger)
     {
@@ -29,15 +29,16 @@ public class Worker : BackgroundService
             .AddJsonFile("appsettings.json")
             .Build();
         _logger = logger;
-        _uploader = new S3FileManager(config, _logger);
+       
         // Initialize Event listener on IoT Core
         _mqttClient = new IotCoreViaWebsocket(config,_logger);
+        _uploader = new S3FileManager(config, _logger,_mqttClient.ClientId);
         _pathToWatch = config["FOLDER:Path"];
     
-        _logger.LogInformation("Worker initialized...");
+        _logger.LogInformation("Worker initialized...client id {clientid}",_mqttClient.ClientId);
     }
 
- 
+   
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -49,14 +50,16 @@ public class Worker : BackgroundService
         {
             EnableRaisingEvents = true,
             IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime   | NotifyFilters.Size
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime   | NotifyFilters.Size | NotifyFilters.DirectoryName
         };
-
+        _watcher.InternalBufferSize = 64 * 1024; // max 64 KB
         _watcher.Created += OnCreated;
         _watcher.Changed += OnChanged;
         _watcher.Deleted += OnDeleted;
         _watcher.Renamed += OnRenamed;
-
+        _watcher.Error += (s, e) =>
+            _logger.LogError(e.GetException(), "FileSystemWatcher buffer overflow or error");
+        
         _logger.LogInformation("Started watching {path}", _pathToWatch);
         await _mqttClient.ConnectAndSubscribeAsync();
         await Task.Delay(TimeSpan.FromSeconds(30));        
@@ -69,7 +72,7 @@ public class Worker : BackgroundService
     {
         if (ShouldIgnore(e.FullPath)) return;
 
-        _logger.LogInformation("File renamed from {OldName} to {NewName}", e.OldFullPath, e.FullPath);
+        _logger.LogInformation("(OnRenamed) File renamed from {OldName} to {NewName}", e.OldFullPath, e.FullPath);
 
         try
         {
@@ -80,11 +83,11 @@ public class Worker : BackgroundService
 
             await _mqttClient.PublishRenameMessage(oldKey, newKey, DateTimeOffset.UtcNow.ToUnixTimeSeconds() );
 
-            _logger.LogInformation("S3 file renamed from {OldKey} to {NewKey}", oldKey, newKey);
+            _logger.LogInformation("(OnRenamed) S3 file renamed from {OldKey} to {NewKey}", oldKey, newKey);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to handle renamed file from {OldFile} to {NewFile}", e.OldFullPath, e.FullPath);
+            _logger.LogError(ex, "(OnRenamed) Failed to handle renamed file from {OldFile} to {NewFile}", e.OldFullPath, e.FullPath);
            
 
             EnqueueRenamePath(e.OldFullPath,e.FullPath);
@@ -98,11 +101,11 @@ public class Worker : BackgroundService
         if (ShouldIgnore(e.FullPath)) return;
         _logger.LogInformation("(OnCreated) File created: {file}", e.FullPath);
         _ = HandleFileChangeAsync(e.FullPath);
+        _changeTracker.RefreshSnapshot();
     }
 
     private void OnDeleted(object sender, FileSystemEventArgs e)
-    {
-
+    {      
         if (FilesIo.FileManagerService._recentlyRenamedFiles.TryGetValue(e.FullPath, out DateTime renameTime))
         {
             if ((DateTime.UtcNow - renameTime).TotalSeconds < 1)
@@ -119,12 +122,25 @@ public class Worker : BackgroundService
         {
             try
             {
-                _logger.LogInformation("(OnDeleted) File deleted: {file}", e.FullPath);
-              
-
-                // se è un file singolo
-                string relativeKeyPath = Path.GetRelativePath(_pathToWatch, e.FullPath).Replace("\\", "/");
-                await _mqttClient.PublishDeleteMessage(relativeKeyPath);
+                
+                if (_changeTracker.WasPathDirectory(e.FullPath))
+                {
+                    _logger.LogInformation("(OnDeleted) File deleted is a directory: {file}", e.FullPath);
+                    var files = _changeTracker.GetFilesUnderPath(e.FullPath);
+                    foreach (var f in files)
+                    {                        
+                        string relative = Path.GetRelativePath(_pathToWatch, f).Replace("\\", "/");
+                        _logger.LogInformation("(OnDeleted) File to delete inside folder {file} is : {fileName}", e.FullPath, relative);
+                        await _mqttClient.PublishDeleteMessage(relative);
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("(OnDeleted) File deleted is single key: {file}", e.FullPath);
+                    // se è un file singolo
+                    string relativeKeyPath = Path.GetRelativePath(_pathToWatch, e.FullPath).Replace("\\", "/");
+                    await _mqttClient.PublishDeleteMessage(relativeKeyPath);
+                }
                 _changeTracker.RefreshSnapshot();
             }
             catch (Exception ex)
@@ -194,38 +210,28 @@ public class Worker : BackgroundService
         if (ShouldIgnore(e.FullPath)) return;
         _logger.LogInformation("(OnChanged) File changed: {file}", e.FullPath);
         _ = HandleFileChangeAsync(e.FullPath);
+        _changeTracker.RefreshSnapshot();
     }
 
     private async Task HandleFileChangeAsync(string fullPath)
     {
         try
         {
-
+           
             if (FileModificationTracker.WasRecentlyModifiedByMqtt(fullPath))
             {
                return; // Skip upload
             }
             if (Directory.Exists(fullPath))
             {
-                _logger.LogInformation("Skipping directory change: {dir}", fullPath);
-                if (_changeTracker.WasPathDirectory(fullPath))
-                {
-                    var deletedFiles = _changeTracker.GetDeletedFiles();
-
-                    foreach (var deletedFile in deletedFiles)
-                    {
-                        string relativeKey = Path.GetRelativePath(_pathToWatch, deletedFile).Replace("\\", "/");
-                        _logger.LogInformation("(OnDeleted) Detected deleted file via snapshot: {file}", deletedFile);
-                        await _mqttClient.PublishDeleteMessage(relativeKey);
-                    }
-                    return;
-                }
+                _logger.LogInformation("(HandleFileChangeAsync) Skipping directory change: {dir}", fullPath);
                 return;
+                
             }
 
             if (!File.Exists(fullPath))
             {
-                _logger.LogWarning("File does not exist: {file}", fullPath);
+                _logger.LogWarning("(HandleFileChangeAsync) File does not exist: {file}", fullPath);
                 return;
             }
 
@@ -235,7 +241,7 @@ public class Worker : BackgroundService
                 {
                     if (DateTime.UtcNow - lastExecution < _debounceWindow)
                     {
-                        _logger.LogInformation("Skipping duplicate trigger for {file}", fullPath);
+                        _logger.LogInformation("(HandleFileChangeAsync) Skipping duplicate trigger for {file}", fullPath);
                         return;
                     }
                 }
@@ -243,14 +249,14 @@ public class Worker : BackgroundService
             }
 
             // Aspetta che il file non sia più lockato (max 5 tentativi)
-            int maxRetries = 5;
+            int maxRetries = 3;
             for (int i = 0; i < maxRetries; i++)
             {
                 if (await IsFileReadyAsync(fullPath))
                     break;
 
-                _logger.LogWarning("File {file} is still in use. Retrying in 1500ms...", fullPath);
-                await Task.Delay(1500);
+                _logger.LogWarning("(HandleFileChangeAsync) File {file} is still in use. Retrying in 1500ms...", fullPath);
+                await Task.Delay(500);
             }
 
             var relativePath = Path.GetRelativePath(_pathToWatch, fullPath);
@@ -295,21 +301,40 @@ public class Worker : BackgroundService
 
     private static async Task<bool> IsFileReadyAsync(string filePath)
     {
+        const int maxChecks = 3;
+        const int delayBetweenChecksMs = 1000;
+
         try
         {
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.None, 4096, true);
-            await Task.CompletedTask; 
-            return true;
-        }
-        catch (IOException)
-        {
+            long lastLength = -1;
+
+            for (int i = 0; i < maxChecks; i++)
+            {
+                if (!File.Exists(filePath))
+                    return false;
+
+                var fileInfo = new FileInfo(filePath);
+                long currentLength = fileInfo.Length;
+
+                if (currentLength > 0 && currentLength == lastLength)
+                {
+                    // dimensione stabile => file probabilmente pronto
+                    return true;
+                }
+
+                lastLength = currentLength;
+                await Task.Delay(delayBetweenChecksMs);
+            }
+
             return false;
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception ex)
         {
+            _logger?.LogWarning(ex, "(IsFileReadyAsync) Failed to check readiness for: {file}", filePath);
             return false;
         }
     }
+
 
     public override Task StopAsync(CancellationToken cancellationToken)
     {
