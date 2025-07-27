@@ -11,9 +11,11 @@ public class Worker : BackgroundService
 {
     private static ILogger<Worker> _logger;
     private readonly ILogger<S3FileManager> _s3Logger;
-    
+    private readonly ILogger<MyDirectoryWatcher> _watcherLogger;
 
-    private FileSystemWatcher? _watcher;
+
+
+    private static MyDirectoryWatcher? _watcher;
     private static string _pathToWatch = @"C:\Temp";
     private static S3FileManager _uploader;
     private readonly IotCoreViaWebsocket _mqttClient;
@@ -23,7 +25,7 @@ public class Worker : BackgroundService
     private DirectoryChangeTracker _changeTracker;
     
 
-    public Worker(ILogger<Worker> logger, ILogger<S3FileManager> s3Logger)
+    public Worker(ILogger<Worker> logger, ILogger<S3FileManager> s3Logger, ILogger<MyDirectoryWatcher> watcherLogger)
     {
       IConfiguration config=  new ConfigurationBuilder()
             .AddJsonFile("appsettings.json")
@@ -34,7 +36,14 @@ public class Worker : BackgroundService
         _mqttClient = new IotCoreViaWebsocket(config,_logger);
         _uploader = new S3FileManager(config, _logger,_mqttClient.ClientId);
         _pathToWatch = config["FOLDER:Path"];
-    
+        _watcherLogger = watcherLogger;
+        _s3Logger = s3Logger;
+        _watcher = new MyDirectoryWatcher(_pathToWatch, _watcherLogger);
+        _watcher.Created += OnCreated;
+        _watcher.Changed += OnChanged;
+        _watcher.Deleted += OnDeleted;
+        _watcher.Renamed += OnRenamed;
+
         _logger.LogInformation("Worker initialized...client id {clientid}",_mqttClient.ClientId);
     }
 
@@ -59,25 +68,38 @@ public class Worker : BackgroundService
         }
         _changeTracker = new DirectoryChangeTracker(_pathToWatch);
 
-        _watcher = new FileSystemWatcher(_pathToWatch)
-        {
-            EnableRaisingEvents = true,
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime   | NotifyFilters.Size | NotifyFilters.DirectoryName
-        };
-        _watcher.InternalBufferSize = 64 * 1024; // max 64 KB
-        _watcher.Created += OnCreated;
-        _watcher.Changed += OnChanged;
-        _watcher.Deleted += OnDeleted;
-        _watcher.Renamed += OnRenamed;
-        _watcher.Error += (s, e) =>
-            _logger.LogError(e.GetException(), "FileSystemWatcher buffer overflow or error");
+        
+       await _watcher.StartAsync();
+        //{
+        //    EnableRaisingEvents = true,
+        //    IncludeSubdirectories = true,
+        //    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime   | NotifyFilters.Size | NotifyFilters.DirectoryName
+        //};
+        // _watcher.InternalBufferSize = 64 * 1024; // max 64 KB
+     //   _watcher.Created += OnCreated;
+       // _watcher.Changed += OnChanged;
+       // _watcher.Deleted += OnDeleted;
+       // _watcher.Renamed += OnRenamed;
+       // _watcher.Error += (s, e) =>
+       //     _logger.LogError(e.GetException(), "FileSystemWatcher buffer overflow or error");
         
         _logger.LogInformation("Started watching {path}", _pathToWatch);
         await _mqttClient.ConnectAndSubscribeAsync();
-        await Task.Delay(TimeSpan.FromSeconds(30));        
-        await Task.Delay(Timeout.Infinite, stoppingToken);
+        await Task.Delay(TimeSpan.FromSeconds(30));               
         await PublishQueuedNewfilesAsync();
+        try
+        {
+            // Attendi fino a quando viene richiesto lo stop
+            await Task.Delay(Timeout.Infinite, stoppingToken);
+        }
+        catch (TaskCanceledException)
+        {
+            // Stop richiesto
+        }
+        finally
+        {
+            await _watcher.StopAsync();
+        }
     }
 
 

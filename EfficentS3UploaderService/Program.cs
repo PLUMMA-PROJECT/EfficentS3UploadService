@@ -1,3 +1,4 @@
+using EfficentS3UploadService.FilesIo;
 using EfficentS3UploadService.Worker;
 using Serilog;
 IConfiguration config = new ConfigurationBuilder()
@@ -18,8 +19,8 @@ var host = Host.CreateDefaultBuilder(args)
     .UseSerilog()
     .ConfigureServices((hostContext, services) =>
     {
-        services.AddHostedService<Worker>();
-    })
+        services.AddHostedService<Worker>();        
+    })    
     .Build();
 
 host.Run();
