@@ -12,7 +12,7 @@ namespace EfficentS3UploadService.FilesIo
     {
         private readonly ILogger<MyDirectoryWatcher> _logger;
         private readonly string _directoryToWatch;
-        private readonly TimeSpan _pollingInterval = TimeSpan.FromSeconds(10);
+        private readonly TimeSpan _pollingInterval = TimeSpan.FromSeconds(6);
         private Dictionary<string, FileSnapshot> _previousSnapshot = new();
 
         private CancellationTokenSource? _cts;
@@ -70,11 +70,14 @@ namespace EfficentS3UploadService.FilesIo
         {
             _logger.LogInformation("[WATCHING] {Directory}", _directoryToWatch);
 
+            // 1️⃣ Primo snapshot iniziale SENZA rilevare modifiche
+            _previousSnapshot = CaptureSnapshot(_directoryToWatch);
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
-                    _logger.LogInformation("[WATCHING] Try detect changes {Directory}", _directoryToWatch);
+                    _logger.LogInformation("[WATCHING] Detecting changes in {Directory}", _directoryToWatch);
                     var currentSnapshot = CaptureSnapshot(_directoryToWatch);
                     DetectChanges(_previousSnapshot, currentSnapshot);
                     _previousSnapshot = currentSnapshot;

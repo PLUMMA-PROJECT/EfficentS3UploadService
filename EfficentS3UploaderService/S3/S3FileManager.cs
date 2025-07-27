@@ -42,7 +42,7 @@ public class S3FileManager
             // Calcola SHA256 locale
             string localSha256;
             using (var sha256 = SHA256.Create())
-            using (var stream = File.OpenRead(filePath))
+            using (var stream =   TryOpenFile(filePath))
             {
                 var hashBytes = sha256.ComputeHash(stream);
                 localSha256 = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
@@ -130,6 +130,23 @@ public class S3FileManager
 
         await fileTransferUtility.UploadAsync(uploadRequest);
         _logger.LogInformation("(Upload) Upload completato per '{keyName}' - client id  {clientId}.", keyName,this._clientId);
+    }
+
+
+    private FileStream TryOpenFile(string path, int maxRetries = 5, int delayMs = 500)
+    {
+        for (int i = 0; i < maxRetries; i++)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(delayMs);
+            }
+        }
+        throw new IOException($"Impossibile accedere al file '{path}' dopo {maxRetries} tentativi.");
     }
 
 

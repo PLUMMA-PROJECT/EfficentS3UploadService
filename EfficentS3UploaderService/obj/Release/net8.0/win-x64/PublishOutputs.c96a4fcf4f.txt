@@ -1,10 +1,4 @@
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\appsettings.Development.json
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\appsettings.json
-C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\publish\appsettings.Development.json
-C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\publish\appsettings.json
-C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\publish\online_status.json
-C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\publish\publish\appsettings.Development.json
-C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\publish\publish\appsettings.json
-C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\publish\publish\online_status.json
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\EfficentS3UploadService.pdb
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\publish\EfficentS3UploadService.exe
