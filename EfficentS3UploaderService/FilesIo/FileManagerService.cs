@@ -43,7 +43,7 @@ namespace EfficentS3UploadService.FilesIo
                 }
 
                 // Decode the S3 key and determine the local file path
-                string s3Key = HttpUtility.UrlDecode(encodedKey);
+                string s3Key = (encodedKey);
                 string localPath = Path.Combine(_basePath, s3Key);
 
                 // Retrieve the SHA256 metadata stored in S3

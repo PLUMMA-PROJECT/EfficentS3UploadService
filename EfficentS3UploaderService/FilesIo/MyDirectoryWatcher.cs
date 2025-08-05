@@ -68,7 +68,7 @@ namespace EfficentS3UploadService.FilesIo
 
         private async Task WatchDirectoryAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("[WATCHING] {Directory}", _directoryToWatch);
+            _logger.LogDebug("[WATCHING] {Directory}", _directoryToWatch);
 
             _previousSnapshot = await CaptureSnapshotAsync(_directoryToWatch, stoppingToken);
 
@@ -221,6 +221,9 @@ namespace EfficentS3UploadService.FilesIo
         {
             _logger.LogInformation("[DELETED] {Path}", path);
             Deleted?.Invoke(this, new FileSystemEventArgs(WatcherChangeTypes.Deleted, Path.GetDirectoryName(path)!, Path.GetFileName(path)));
+            var currentSnapshot = await CaptureSnapshotAsync(_directoryToWatch, stoppingToken);
+            DetectChanges(_previousSnapshot, currentSnapshot);
+            _previousSnapshot = currentSnapshot;
         }
 
         private void OnChanged(string path)
