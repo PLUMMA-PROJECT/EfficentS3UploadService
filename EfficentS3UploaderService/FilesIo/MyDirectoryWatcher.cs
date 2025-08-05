@@ -13,7 +13,10 @@ namespace EfficentS3UploadService.FilesIo
         private readonly ILogger<MyDirectoryWatcher> _logger;
         private readonly string _directoryToWatch;
         private readonly TimeSpan _pollingInterval = TimeSpan.FromSeconds(6);
+        private readonly TimeSpan _stabilityThreshold = TimeSpan.FromSeconds(10);
+        private readonly TimeSpan _renameWindow = TimeSpan.FromSeconds(10);
         private Dictionary<string, FileSnapshot> _previousSnapshot = new();
+        private readonly Dictionary<FileSnapshot, DateTime> _recentlyDeleted = new();
 
         private CancellationTokenSource? _cts;
         private Task? _watchingTask;
@@ -21,7 +24,7 @@ namespace EfficentS3UploadService.FilesIo
         public event EventHandler<FileSystemEventArgs>? Created;
         public event EventHandler<FileSystemEventArgs>? Changed;
         public event EventHandler<FileSystemEventArgs>? Deleted;
-        public event EventHandler<RenamedEventArgs>? Renamed; // Per eventuale gestione rinomini
+        public event EventHandler<RenamedEventArgs>? Renamed;
 
         public MyDirectoryWatcher(string directoryToWatch, ILogger<MyDirectoryWatcher> logger)
         {
@@ -30,7 +33,6 @@ namespace EfficentS3UploadService.FilesIo
             _logger.LogInformation("[WATCHING] Starting directory watcher {Directory}", _directoryToWatch);
         }
 
-        // Metodo pubblico per avviare il watcher in modo asincrono
         public Task StartAsync()
         {
             if (_watchingTask != null && !_watchingTask.IsCompleted)
@@ -41,7 +43,6 @@ namespace EfficentS3UploadService.FilesIo
             return Task.CompletedTask;
         }
 
-        // Metodo per fermare il watcher
         public async Task StopAsync()
         {
             if (_cts == null)
@@ -56,7 +57,7 @@ namespace EfficentS3UploadService.FilesIo
             }
             catch (OperationCanceledException)
             {
-                // previsto alla cancellazione
+                // expected
             }
             finally
             {
@@ -68,15 +69,12 @@ namespace EfficentS3UploadService.FilesIo
 
         private async Task WatchDirectoryAsync(CancellationToken stoppingToken)
         {
-            _logger.LogDebug("[WATCHING] {Directory}", _directoryToWatch);
-
             _previousSnapshot = await CaptureSnapshotAsync(_directoryToWatch, stoppingToken);
 
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
-                    _logger.LogDebug("[WATCHING] Detecting changes in {Directory}", _directoryToWatch);
                     var currentSnapshot = await CaptureSnapshotAsync(_directoryToWatch, stoppingToken);
                     DetectChanges(_previousSnapshot, currentSnapshot);
                     _previousSnapshot = currentSnapshot;
@@ -90,14 +88,12 @@ namespace EfficentS3UploadService.FilesIo
             }
         }
 
-
         private async Task<Dictionary<string, FileSnapshot>> CaptureSnapshotAsync(string directory, CancellationToken cancellationToken)
         {
             var snapshot = new Dictionary<string, FileSnapshot>(StringComparer.OrdinalIgnoreCase);
             var nowUtc = DateTime.UtcNow;
-            var stabilityThreshold = TimeSpan.FromSeconds(10);
             int maxRetries = 3;
-            int delayMs = 100; // 100 ms tra i retry
+            int delayMs = 100;
 
             foreach (var filePath in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
             {
@@ -105,10 +101,9 @@ namespace EfficentS3UploadService.FilesIo
                     continue;
 
                 int attempt = 0;
-                bool success = false;
                 FileInfo? info = null;
 
-                while (attempt < maxRetries && !success)
+                while (attempt < maxRetries)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
@@ -116,11 +111,14 @@ namespace EfficentS3UploadService.FilesIo
                     {
                         info = new FileInfo(filePath);
 
-                        // Salta file troppo recenti (ancora in scrittura)
-                        if (nowUtc - info.LastWriteTimeUtc < stabilityThreshold)
-                            break;
+                        if (nowUtc - info.LastWriteTimeUtc < _stabilityThreshold)
+                        {
+                            attempt++;
+                            await Task.Delay(delayMs, cancellationToken);
+                            continue;
+                        }
 
-                        success = true; // lettura riuscita
+                        break;
                     }
                     catch (IOException)
                     {
@@ -132,28 +130,25 @@ namespace EfficentS3UploadService.FilesIo
                     catch (UnauthorizedAccessException)
                     {
                         _logger.LogWarning("File non autorizzato: {Path}", filePath);
-                        break; // non ha senso ritentare
+                        break;
                     }
                 }
 
-                if (!success || info == null)
-                    continue;
-
-                snapshot[filePath] = new FileSnapshot
+                if (info != null)
                 {
-                    FullPath = filePath,
-                    LastWriteTimeUtc = info.LastWriteTimeUtc,
-                    Length = info.Length
-                };
+                    snapshot[filePath] = new FileSnapshot
+                    {
+                        FullPath = filePath,
+                        LastWriteTimeUtc = info.LastWriteTimeUtc,
+                        Length = info.Length
+                    };
+                }
             }
 
             return snapshot;
         }
 
-
-        private void DetectChanges(
-      Dictionary<string, FileSnapshot> previous,
-      Dictionary<string, FileSnapshot> current)
+        private void DetectChanges(Dictionary<string, FileSnapshot> previous, Dictionary<string, FileSnapshot> current)
         {
             var prevKeys = new HashSet<string>(previous.Keys);
             var currKeys = new HashSet<string>(current.Keys);
@@ -162,7 +157,6 @@ namespace EfficentS3UploadService.FilesIo
             var removed = prevKeys.Except(currKeys).ToList();
             var maybeModified = currKeys.Intersect(prevKeys);
 
-            // Prova a rilevare i rinomini prima di trattare aggiunte e rimozioni
             var handledAdded = new HashSet<string>();
             var handledRemoved = new HashSet<string>();
 
@@ -170,46 +164,70 @@ namespace EfficentS3UploadService.FilesIo
             {
                 var oldFile = previous[removedPath];
 
-                // Cerca un added file che abbia caratteristiche simili (dimensione, data)
+                // Cerca tra gli added un possibile rename
                 var possibleRenamedNewPath = added.FirstOrDefault(newPath =>
                 {
                     var newFile = current[newPath];
                     return newFile.Length == oldFile.Length &&
-                           newFile.LastWriteTimeUtc == oldFile.LastWriteTimeUtc;
+                           Math.Abs((newFile.LastWriteTimeUtc - oldFile.LastWriteTimeUtc).TotalSeconds) < 2;
                 });
 
                 if (possibleRenamedNewPath != null)
                 {
-                    // Rilevato rename
                     OnRenamed(removedPath, possibleRenamedNewPath);
-
                     handledRemoved.Add(removedPath);
                     handledAdded.Add(possibleRenamedNewPath);
                 }
+                else
+                {
+                    // Salva in memoria per un possibile match successivo
+                    _recentlyDeleted[oldFile] = DateTime.UtcNow;
+                }
             }
 
-            // Ora segnala i restanti added come created
+            // Cleanup dei deleted troppo vecchi
+            var expiration = DateTime.UtcNow - _renameWindow;
+            foreach (var old in _recentlyDeleted.ToList())
+            {
+                if (old.Value < expiration)
+                    _recentlyDeleted.Remove(old.Key);
+            }
+
+            // Controlla se gli added matchano deleted recenti → possibile rename ritardato
+            foreach (var newPath in added.Except(handledAdded))
+            {
+                var newFile = current[newPath];
+
+                var matchedOld = _recentlyDeleted.Keys.FirstOrDefault(old =>
+                    old.Length == newFile.Length &&
+                    Math.Abs((old.LastWriteTimeUtc - newFile.LastWriteTimeUtc).TotalSeconds) < 2);
+
+                if (matchedOld != null)
+                {
+                    OnRenamed(matchedOld.FullPath, newPath);
+                    handledAdded.Add(newPath);
+                    _recentlyDeleted.Remove(matchedOld);
+                }
+            }
+
+            // Eventi Created
             foreach (var path in added.Except(handledAdded))
                 OnCreated(path);
 
-            // E segnala i restanti removed come deleted
+            // Eventi Deleted
             foreach (var path in removed.Except(handledRemoved))
                 OnDeleted(path);
 
-            // Segnala modifiche
+            // Eventi Changed
             foreach (var path in maybeModified)
             {
                 var oldFile = previous[path];
                 var newFile = current[path];
 
-                if (oldFile.LastWriteTimeUtc != newFile.LastWriteTimeUtc ||
-                    oldFile.Length != newFile.Length)
-                {
+                if (oldFile.LastWriteTimeUtc != newFile.LastWriteTimeUtc || oldFile.Length != newFile.Length)
                     OnChanged(path);
-                }
             }
         }
-
 
         private void OnCreated(string path)
         {
@@ -221,9 +239,6 @@ namespace EfficentS3UploadService.FilesIo
         {
             _logger.LogInformation("[DELETED] {Path}", path);
             Deleted?.Invoke(this, new FileSystemEventArgs(WatcherChangeTypes.Deleted, Path.GetDirectoryName(path)!, Path.GetFileName(path)));
-            var currentSnapshot = await CaptureSnapshotAsync(_directoryToWatch, stoppingToken);
-            DetectChanges(_previousSnapshot, currentSnapshot);
-            _previousSnapshot = currentSnapshot;
         }
 
         private void OnChanged(string path)
@@ -248,13 +263,11 @@ namespace EfficentS3UploadService.FilesIo
             string fileName = Path.GetFileName(path);
             string lowerPath = path.ToLowerInvariant();
 
-            // Skip system folders
             if (lowerPath.Contains(@"\$recycle.bin\") ||
                 lowerPath.Contains(@"\system volume information\") ||
                 lowerPath.Contains(@"\windows\"))
                 return true;
 
-            // Skip hidden or system files
             try
             {
                 var attr = File.GetAttributes(path);
@@ -266,7 +279,6 @@ namespace EfficentS3UploadService.FilesIo
                 return true;
             }
 
-            // Skip known temporary or irrelevant files
             string[] ignoredFiles =
             {
                 "thumbs.db", "desktop.ini", "ehthumbs.db", "iconcache.db",
@@ -277,11 +289,9 @@ namespace EfficentS3UploadService.FilesIo
             if (ignoredFiles.Contains(fileName, StringComparer.OrdinalIgnoreCase))
                 return true;
 
-            // Skip temp/editing files (Office, Foto, etc.)
             if (fileName.StartsWith("~") || fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) || fileName.EndsWith(".~tmp", StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            // Files without extension are suspicious (often temp)
             if (string.IsNullOrWhiteSpace(Path.GetExtension(fileName)))
                 return true;
 
@@ -299,6 +309,18 @@ namespace EfficentS3UploadService.FilesIo
             public string FullPath { get; set; } = null!;
             public DateTime LastWriteTimeUtc { get; set; }
             public long Length { get; set; }
+
+            public override bool Equals(object? obj)
+            {
+                return obj is FileSnapshot other &&
+                       Length == other.Length &&
+                       LastWriteTimeUtc == other.LastWriteTimeUtc;
+            }
+
+            public override int GetHashCode()
+            {
+                return HashCode.Combine(Length, LastWriteTimeUtc);
+            }
         }
     }
 }
