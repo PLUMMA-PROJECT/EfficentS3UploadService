@@ -1,0 +1,292 @@
+﻿using Amazon.S3;
+using Amazon.S3.Model;
+using Microsoft.Extensions.Logging;
+using Microsoft.VisualBasic.FileIO;
+using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+using System.Web;
+
+namespace EfficentS3UploadService.FilesIo
+{
+    // This service handles file synchronization between AWS S3 and the local file system.
+    internal class FileManagerService
+    {
+        private readonly ILogger<Worker.Worker> _logger;
+        private readonly string _basePath;
+        private readonly IAmazonS3 _s3Client;
+        private readonly string _bucketName;
+        public static Dictionary<string, DateTime> _recentlyRenamedFiles = new();
+
+        // Constructor initializes required dependencies
+        public FileManagerService(ILogger<Worker.Worker> logger, string basePath, IAmazonS3 s3Client, string bucketName)
+        {
+            _logger = logger;
+            _basePath = basePath;
+            _s3Client = s3Client;
+            _bucketName = bucketName;
+        }
+
+        // Processes an MQTT message and downloads the corresponding file from S3 if needed
+        public async Task ProcessMessageAndDownloadAsync(string jsonMessage)
+        {
+            _logger.LogInformation("(ProcessMessageAndDownloadAsync) File to process: {json}", jsonMessage);
+
+            try
+            {
+                // Deserialize the incoming message
+                var payload = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(jsonMessage);
+                if (payload == null || !payload.TryGetValue("key", out var encodedKey))
+                {
+                    _logger.LogWarning("JSON message does not contain 'key': {json}", jsonMessage);
+                    return;
+                }
+
+                // Decode the S3 key and determine the local file path
+                string s3Key = (encodedKey);
+                string localPath = Path.Combine(_basePath, s3Key);
+
+                // Retrieve the SHA256 metadata stored in S3
+                string? s3Sha256 = await GetS3ObjectSha256MetadataAsync(s3Key);
+                await Task.Delay(1500);
+                // Check if the local file exists and is already up-to-date
+                if (File.Exists(localPath))
+                {
+                    byte[] localFileBytes = File.ReadAllBytes(localPath);
+                    string localSha256 = ComputeSha256(localFileBytes);
+
+                    if (!string.IsNullOrEmpty(s3Sha256) && localSha256 == s3Sha256)
+                    {
+                        _logger.LogInformation("(ProcessMessageAndDownloadAsync) Local file is already up to date (SHA256 match), skipping download: {localPath}", localPath);
+                        return;
+                    }
+                }
+                await Task.Delay(1500);
+                // Ensure the local directory exists
+                Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+
+                // Download file from S3
+                byte[] s3Content = await DownloadFromS3Async(s3Key);
+                if (s3Content == null)
+                {
+                    _logger.LogWarning("(ProcessMessageAndDownloadAsync) File not found on S3 for key: {s3Key}", s3Key);
+                    return;
+                }
+
+                // Mark the file as modified by MQTT (for downstream logic)
+                FileModificationTracker.MarkAsModifiedByMqtt(localPath);
+                await Task.Delay(1500);
+                // Write the file to the local file system
+                SaveOrUpdateFile(localPath, s3Content);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error while processing JSON message: {json}", jsonMessage);
+            }
+        }
+
+        // Downloads a file from S3 and returns it as byte array
+        private async Task<byte[]?> DownloadFromS3Async(string key)
+        {
+            try
+            {
+                GetObjectRequest request = new()
+                {
+                    BucketName = _bucketName,
+                    Key = key
+                };
+
+                using GetObjectResponse response = await _s3Client.GetObjectAsync(request);
+                using var ms = new MemoryStream();
+                await response.ResponseStream.CopyToAsync(ms);
+                return ms.ToArray();
+            }
+            catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogWarning("(DownloadFromS3Async) File not found in S3: {key}", key);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "(DownloadFromS3Async) Error while downloading from S3: {key}", key);
+                return null;
+            }
+        }
+
+        // Writes or updates the file only if its content has changed
+        private void SaveOrUpdateFile(string filePath, byte[] newContent)
+        {
+            try
+            {
+                if (File.Exists(filePath))
+                {
+                    if (IsFileLocked(filePath))
+                    {
+                        _logger.LogWarning("File is in use and cannot be overwritten: {filePath}", filePath);
+                        return;
+                    }
+
+                    byte[] existingContent = File.ReadAllBytes(filePath);
+                    if (ComputeSha256(existingContent) == ComputeSha256(newContent))
+                    {
+                        _logger.LogInformation("Content is identical, file was not modified: {filePath}", filePath);
+                        return;
+                    }
+
+                    _logger.LogInformation("Overwriting file: {filePath}", filePath);
+                }
+                else
+                {
+                    _logger.LogInformation("Creating new file: {filePath}", filePath);
+                }
+
+                File.WriteAllBytes(filePath, newContent);
+                _logger.LogInformation("File written successfully: {filePath}", filePath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error writing file: {filePath}", filePath);
+            }
+        }
+
+        // Determines if a file is currently locked by another process
+        private static bool IsFileLocked(string path)
+        {
+            try
+            {
+                using FileStream stream = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                return false;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+        }
+
+        // Computes the SHA256 checksum of the provided byte array
+        private static string ComputeSha256(byte[] data)
+        {
+            using SHA256 sha256 = SHA256.Create();
+            byte[] hashBytes = sha256.ComputeHash(data);
+            return BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
+        }
+
+        // Retrieves SHA256 metadata from the S3 object if available
+        private async Task<string?> GetS3ObjectSha256MetadataAsync(string key)
+        {
+            try
+            {
+                var metadataRequest = new GetObjectMetadataRequest
+                {
+                    BucketName = _bucketName,
+                    Key = key
+                };
+
+                var metadataResponse = await _s3Client.GetObjectMetadataAsync(metadataRequest);
+
+                string? sha256Value = metadataResponse.Metadata["x-amz-meta-sha256"];
+                return string.IsNullOrEmpty(sha256Value) ? null : sha256Value;
+            }
+            catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogWarning("Metadata not found in S3 for key: {key}", key);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error reading metadata from S3 for key: {key}", key);
+                return null;
+            }
+        }
+
+        // Moves a file to the system Recycle Bin (Windows only)
+        public bool MoveFileToRecycleBin(string filePath)
+        {
+            try
+            {
+                if (_recentlyRenamedFiles.TryGetValue(filePath, out DateTime renameTime))
+                {
+                    if ((DateTime.UtcNow - renameTime).TotalSeconds < 1)
+                    {
+                        // È un falso "delete" dopo una rename
+                        _logger.LogInformation("(MoveFileToRecycleBin) Ignorato delete dopo rename: {Path}", filePath);
+                       // _recentlyRenamedFiles.Remove(filePath);
+                        return true;
+                    }
+                }
+
+                if (File.Exists(filePath))
+                {
+                    FileSystem.DeleteFile(
+                        filePath,
+                        UIOption.OnlyErrorDialogs,
+                        RecycleOption.SendToRecycleBin
+                    );
+                    _logger.LogInformation("(MoveFileToRecycleBin) File moved to Recycle Bin: {filePath}", filePath);
+                    return true;
+                }
+                else
+                {
+                    _logger.LogWarning("(MoveFileToRecycleBin) File to delete does not exist: {filePath}", filePath);
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "(MoveFileToRecycleBin) Error moving file to Recycle Bin: {filePath}", filePath);
+                return false;
+            }
+        }
+
+
+        /// <summary>
+        /// Rinomina un file solo se il timestamp passato è più recente del file esistente.
+        /// </summary>
+        /// <param name="currentFilePath">Il percorso del file esistente da rinominare.</param>
+        /// <param name="newFilePath">Il nuovo percorso (nome) che si vuole assegnare al file.</param>
+        /// <param name="timestamp">Il timestamp di confronto per decidere se rinominare.</param>
+        /// <returns>True se il file è stato rinominato, false altrimenti.</returns>
+        public bool RenameFileIfNewer(string currentFilePath, string newFilePath, DateTime timestamp)
+        {
+            try
+            {
+                if (!File.Exists(currentFilePath))
+                {
+                    _logger.LogWarning("File da rinominare non esiste: {currentFilePath}", currentFilePath);
+                    return false;
+                }
+
+                DateTime fileLastWriteTime = File.GetLastWriteTimeUtc(currentFilePath);
+
+                if (timestamp <= fileLastWriteTime)
+                {
+                    _logger.LogInformation("Il timestamp fornito non è più recente. File non rinominato: {currentFilePath}", currentFilePath);
+                    return false;
+                }
+
+                // Verifica se il file di destinazione esiste già e lo elimina per evitare errori
+                if (File.Exists(newFilePath))
+                {
+                    _logger.LogWarning("File di destinazione esistente attenzione: {newFilePath}", newFilePath);
+                    if (IsFileLocked(newFilePath))
+                    {
+                        _logger.LogWarning("File di destinazione è in uso e non può essere sovrascritto: {newFilePath}", newFilePath);
+                        return false;
+                    }
+                    File.Delete(newFilePath);
+                }
+
+                File.Move(currentFilePath, newFilePath);
+                _recentlyRenamedFiles[currentFilePath] = DateTime.UtcNow;
+                _logger.LogInformation("File rinominato da {currentFilePath} a {newFilePath}", currentFilePath, newFilePath);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Errore durante il rinominare il file {currentFilePath} in {newFilePath}", currentFilePath, newFilePath);
+                return false;
+            }
+        }
+
+    }
+}
