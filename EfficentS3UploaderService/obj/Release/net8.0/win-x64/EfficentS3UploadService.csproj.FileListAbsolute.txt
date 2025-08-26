@@ -221,7 +221,6 @@ C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\hostfxr.dll
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\hostpolicy.dll
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\mscordaccore.dll
-C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\mscordaccore_amd64_amd64_8.0.1825.31117.dll
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\mscordbi.dll
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\mscorrc.dll
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\msquic.dll
@@ -238,3 +237,4 @@ C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Release\net8.0
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Release\net8.0\win-x64\EfficentS3UploadService.genruntimeconfig.cache
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\obj\Release\net8.0\win-x64\ref\EfficentS3UploadService.dll
 C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\appsettings.json
+C:\PROJECTS\EfficentS3UploadService\EfficentS3UploaderService\bin\Release\net8.0\win-x64\mscordaccore_amd64_amd64_8.0.1925.36514.dll

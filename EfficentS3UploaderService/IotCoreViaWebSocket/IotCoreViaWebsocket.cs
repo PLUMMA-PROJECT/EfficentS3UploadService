@@ -103,9 +103,11 @@ namespace EfficentS3UploadService
                 // Subscribe to update and delete topics
 
 
-await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/update").Build());
+                await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/update").Build());
                 await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/delete").Build());
                 await _mqttClient.SubscribeAsync(new MqttClientSubscribeOptionsBuilder().WithTopicFilter("EfficentS3UploadService/rename").Build());
+                await Task.Delay(TimeSpan.FromSeconds(1));
+
                 // Publish "online" message and any pending operations
                 await this.PublishOnlineMessage();
                 await this.PublishQueuedDeletesAsync();
